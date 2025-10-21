@@ -17,3 +17,6 @@ LogLead.egg-info
 *.log
 *.joblib
 *.xlsx
+.venv/
+__pycache__/
+*.pyc
