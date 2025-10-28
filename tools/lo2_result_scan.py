@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -40,6 +41,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the summary without writing files.",
     )
+    parser.add_argument(
+        "--max-false-positives",
+        type=int,
+        default=0,
+        help="Include the first N entries from if_false_positives.txt (0 disables the preview).",
+    )
+    parser.add_argument(
+        "--top-list-items",
+        type=int,
+        default=0,
+        help="Include the first N rows from files matching *top_*.txt (0 disables the preview).",
+    )
     return parser.parse_args()
 
 
@@ -56,10 +69,12 @@ def collect_required_files(base_dir: Path) -> Tuple[List[str], List[str]]:
 
 def collect_shap_artifacts(base_dir: Path) -> List[str]:
     shap_files: List[str] = []
+    counts: Counter[str] = Counter()
     for ext in SHAP_EXTENSIONS:
         for path in base_dir.glob(f"*shap*{ext}"):
             shap_files.append(path.name)
-    return sorted(set(shap_files))
+            counts[ext] += 1
+    return sorted(set(shap_files)), dict(sorted(counts.items()))
 
 
 def load_metrics(base_dir: Path) -> List[Dict[str, object]]:
@@ -110,13 +125,48 @@ def summarise_false_positives(base_dir: Path) -> str:
     return f"{len(lines)} listed" if lines else "file present but empty"
 
 
+def sample_false_positives(base_dir: Path, limit: int) -> List[str]:
+    if limit <= 0:
+        return []
+    fp_path = base_dir / "if_false_positives.txt"
+    if not fp_path.exists():
+        return []
+    try:
+        lines = [line.strip() for line in fp_path.read_text().splitlines() if line.strip()]
+    except Exception:  # pragma: no cover - defensive fallback
+        return []
+    return lines[:limit]
+
+
+def load_top_lists(base_dir: Path, limit: int) -> List[Dict[str, object]]:
+    if limit <= 0:
+        return []
+    entries: List[Dict[str, object]] = []
+    for path in sorted(base_dir.glob("*top_*.txt")):
+        entry: Dict[str, object] = {"file": path.name}
+        try:
+            rows = [line.strip() for line in path.read_text().splitlines() if line.strip()]
+        except Exception as exc:  # pragma: no cover - defensive guard
+            entry["error"] = str(exc)
+            entries.append(entry)
+            continue
+        entry["total"] = len(rows)
+        entry["preview"] = rows[:limit]
+        entry["truncated"] = len(rows) > limit
+        entries.append(entry)
+    return entries
+
+
 def build_summary(
     explain_dir: Path,
     required_present: List[str],
     required_missing: List[str],
     shap_files: List[str],
+    shap_counts: Dict[str, int],
     metrics_summary: List[str],
     false_positive_status: str,
+    false_positive_samples: List[str],
+    top_lists: List[Dict[str, object]],
 ) -> List[str]:
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
     lines = [
@@ -131,7 +181,8 @@ def build_summary(
         lines.append("- Missing artefacts: none")
     lines.extend(
         [
-            f"- SHAP artefacts: {len(shap_files)} file(s)",
+            f"- SHAP artefacts: {len(shap_files)} file(s)"
+            + (f" ({', '.join(f'{ext}: {count}' for ext, count in shap_counts.items())})" if shap_counts else ""),
             f"- False positives list: {false_positive_status}",
             "- Metrics:",
         ]
@@ -142,6 +193,25 @@ def build_summary(
         lines.append("### SHAP files")
         for name in shap_files:
             lines.append(f"- {name}")
+        lines.append("")
+    if false_positive_samples:
+        lines.append("### False positive preview")
+        for entry in false_positive_samples:
+            lines.append(f"- {entry}")
+        lines.append("")
+    if top_lists:
+        lines.append("### Top feature lists")
+        for entry in top_lists:
+            label = entry.get("file", "top list")
+            if "error" in entry:
+                lines.append(f"- {label}: failed to read ({entry['error']})")
+                continue
+            total = entry.get("total", 0)
+            lines.append(f"- {label} (rows={total})")
+            for row in entry.get("preview", []):
+                lines.append(f"  * {row}")
+            if entry.get("truncated"):
+                lines.append("  * ...")
         lines.append("")
     return lines
 
@@ -169,18 +239,23 @@ def main() -> None:
         raise FileNotFoundError(f"Explainability directory not found: {explain_dir}")
 
     present, missing = collect_required_files(explain_dir)
-    shap_files = collect_shap_artifacts(explain_dir)
+    shap_files, shap_counts = collect_shap_artifacts(explain_dir)
     metrics_entries = load_metrics(explain_dir)
     metrics_summary = summarise_metrics(metrics_entries)
     fp_status = summarise_false_positives(explain_dir)
+    fp_samples = sample_false_positives(explain_dir, args.max_false_positives)
+    top_lists = load_top_lists(explain_dir, args.top_list_items)
 
     lines = build_summary(
         explain_dir,
         present,
         missing,
         shap_files,
+        shap_counts,
         metrics_summary,
         fp_status,
+        fp_samples,
+        top_lists,
     )
 
     write_outputs(lines, summary_path, ticket_path, args.dry_run)
