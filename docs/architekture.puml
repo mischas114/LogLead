@@ -1,0 +1,35 @@
+startuml
+actor User
+participant "demo/run_lo2_loader.py" as LoaderCLI
+participant "LO2Loader\n(BaseLoader)" as Loader
+participant "Polars DataFrames" as DF
+participant "demo/lo2_phase_f_explainability.py" as PhaseF
+participant "EventLogEnhancer" as EnhancerEvt
+participant "SequenceEnhancer" as EnhancerSeq
+participant "AnomalyDetector\n(IF/LR/DT)" as AD
+participant "NNExplainer" as NN
+participant "ShapExplainer" as Shap
+database "result/lo2\nParquet + XAI artefacts" as Storage
+
+User -> LoaderCLI : run with --save-parquet
+LoaderCLI -> Loader : execute()
+Loader -> Loader : load() / preprocess()
+Loader -> DF : create loader.df / loader.df_seq
+LoaderCLI -> Storage : write lo2_events.parquet\n(lo2_sequences.parquet, metrics)
+
+User -> PhaseF : run lo2_phase_f_explainability.py
+PhaseF -> Storage : read Parquet exports
+PhaseF -> EnhancerEvt : normalize(), words(), trigrams(), parse_drain(), length()
+EnhancerEvt -> PhaseF : enriched event df
+PhaseF -> EnhancerSeq : seq_len(), duration(), tokens()
+EnhancerSeq -> PhaseF : enriched sequence df
+PhaseF -> AD : train IsolationForest (Phase D replica)
+AD -> PhaseF : predictions + score_if
+PhaseF -> NN : build mapping on top_k anomalies
+NN -> Storage : if_nn_mapping.csv, if_false_positives.txt
+PhaseF -> AD : train LR/DT models (events + sequences)
+AD -> PhaseF : predictions, metrics
+PhaseF -> Shap : calc_shapvalues(), plot()
+Shap -> Storage : lr/dt/seq SHAP plots & feature logs
+PhaseF -> Storage : metrics_*.json, lo2_if_predictions.parquet
+@enduml

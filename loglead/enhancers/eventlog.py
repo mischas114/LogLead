@@ -26,6 +26,13 @@ __all__ = ['EventLogEnhancer']
 
 
 class EventLogEnhancer:
+    """Event-level feature engineering helpers for LO2 logs.
+
+    Interacts with:
+    - Parser classes from ``loglead.parsers`` (Drain, Brain, AEL, IPLoM, LENMA, Spell, TIP, PL_IPLoM).
+    - ``loglead.parsers.BertEmbeddings`` for neural embeddings in ``create_neural_emb``.
+    - ``polars.DataFrame`` transformations that feed ``SequenceEnhancer`` and anomaly models.
+    """
     def __init__(self, df):
         self.df = df
 

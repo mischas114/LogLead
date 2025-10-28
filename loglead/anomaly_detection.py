@@ -37,6 +37,12 @@ __all__ = ['AnomalyDetector', 'LogDistance']
 
 
 class LogDistance:
+    """Utility for comparing reference and analysed log slices.
+
+    Interacts with:
+    - ``sklearn`` vectorizers (default ``CountVectorizer``) for text embedding.
+    - ``polars.DataFrame`` inputs to build diffs and distance reports.
+    """
     def __init__(self, df_train, df_analyze, field="m_message", vectorizer=CountVectorizer):
         """
         Initialize the LogDistannce class with data for distance measurements.
@@ -178,6 +184,13 @@ class LogDistance:
         return cosine_sim, jaccard, compression, containment, self.size1, self.size2
 
 class AnomalyDetector:
+    """Unified interface around multiple anomaly detectors for log data.
+
+    Interacts with:
+    - ``sklearn`` estimators (e.g. ``LogisticRegression``, ``DecisionTreeClassifier``, ``IsolationForest``) via ``train_*`` helpers.
+    - Domain-specific detectors ``RarityModel`` and ``OOV_detector`` from ``loglead``.
+    - ``polars.DataFrame`` inputs for sampling, feature extraction, and result emission.
+    """
     def __init__(self, item_list_col=None, numeric_cols=None, emb_list_col=None, label_col="anomaly", 
                  store_scores=False, print_scores=True, auc_roc=False):
         self.item_list_col = item_list_col

@@ -61,6 +61,22 @@ def parse_args() -> argparse.Namespace:
         default=Path("result/lo2/lo2_if_predictions.parquet"),
         help="Pfad für IsolationForest-Ergebnis (Parquet oder CSV).",
     )
+    parser.add_argument(
+        "--save-enhancers",
+        action="store_true",
+        help="Persist enhanced event/sequence tables to Parquet files.",
+    )
+    parser.add_argument(
+        "--enhancers-output-dir",
+        type=Path,
+        default=Path("result/lo2/enhanced"),
+        help="Directory used when --save-enhancers is active (relative paths resolve against the original working directory).",
+    )
+    parser.add_argument(
+        "--overwrite-enhancers",
+        action="store_true",
+        help="Allow replacing existing enhancer export files.",
+    )
     return parser.parse_args()
 
 
@@ -122,6 +138,8 @@ def main() -> None:
     rand_idx = random.randint(0, len(df_events) - 1)
     print("\nSample enhanced record:")
     print(f"Original:  {df_events['m_message'][rand_idx]}")
+    if "e_message_normalized" in df_events.columns:
+        print(f"Normalized: {df_events['e_message_normalized'][rand_idx]}")
     print(f"Words:     {df_events['e_words'][rand_idx]}")
     print(f"Trigrams:  {df_events['e_trigrams'][rand_idx]}")
     if "e_event_drain_id" in df_events.columns:
@@ -135,6 +153,29 @@ def main() -> None:
         df_seqs = seq_enhancer.duration()
         df_seqs = seq_enhancer.tokens(token="e_words")
         df_seqs = seq_enhancer.tokens(token="e_trigrams")
+
+    if args.save_enhancers:
+        enhancer_dir = args.enhancers_output_dir
+        if not enhancer_dir.is_absolute():
+            enhancer_dir = (orig_cwd / enhancer_dir).resolve()
+        enhancer_dir.mkdir(parents=True, exist_ok=True)
+
+        events_out = enhancer_dir / "lo2_events_enhanced.parquet"
+        if events_out.exists() and not args.overwrite_enhancers:
+            raise SystemExit(
+                f"Enhanced events already exist at {events_out}. Use --overwrite-enhancers to replace them."
+            )
+        df_events.write_parquet(events_out)
+        print(f"Enhanced events gespeichert unter {events_out}")
+
+        if df_seqs is not None and len(df_seqs):
+            seqs_out = enhancer_dir / "lo2_sequences_enhanced.parquet"
+            if seqs_out.exists() and not args.overwrite_enhancers:
+                raise SystemExit(
+                    f"Enhanced sequences already exist at {seqs_out}. Use --overwrite-enhancers to replace them."
+                )
+            df_seqs.write_parquet(seqs_out)
+            print(f"Enhanced sequences gespeichert unter {seqs_out}")
 
     if args.phase == "enhancers":
         print("\nEnhancer phase complete. Skipping anomaly detection and explainability.")

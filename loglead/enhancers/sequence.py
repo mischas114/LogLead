@@ -6,6 +6,12 @@ __all__ = ['SequenceEnhancer']
 
 
 class SequenceEnhancer:
+    """Sequence-level aggregations derived from event features.
+
+    Interacts with:
+    - ``polars.DataFrame`` joins/group-bys to summarise events per ``seq_id``.
+    - ``loglead.NextEventPredictionNgram`` via ``next_event_prediction`` for language-model style scoring.
+    """
     def __init__(self, df, df_seq):
         self.df = df
         self.df_seq = df_seq

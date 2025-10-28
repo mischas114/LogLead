@@ -10,6 +10,13 @@ __all__ = ['LO2Loader']
 # note that metric loader is implemented but it hasn't been used much so there are likely issues
 
 class LO2Loader(BaseLoader):
+    """Loader for LO2 pipeline runs stored on disk.
+
+    Interacts with:
+    - ``BaseLoader`` for the shared execute/preprocess lifecycle via ``super().__init__``.
+    - ``polars.DataFrame`` instances produced by ``_process_log_file`` and metrics helpers.
+    - Downstream enhancers such as ``EventLogEnhancer``/``SequenceEnhancer`` which expect the emitted schema.
+    """
     def __init__(self, filename, df=None, df_seq=None, n_runs=53, errors_per_run=1, dup_errors=True, single_error_type=None, single_service=""):
         """
         :param filename: Path to the data directory (this is the root where the runs are).
