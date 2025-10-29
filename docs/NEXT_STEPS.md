@@ -22,14 +22,14 @@
     --shap-sample 200
   ```
   Anschließend den Result-Scan laufen lassen, um die neuen Kennzahlen zu protokollieren.
-- Für schnellere Iterationen vor großen Datenläufen `LO2_samples.py --phase enhancers` (Feature-Check) und `lo2_feature_test.py` (Matrix-Shape) laufen lassen, dann erst `--phase full` / Phase-F aufsetzen.
+- Für schnellere Iterationen vor großen Datenläufen `LO2_samples.py --phase enhancers` (Feature-Check) ausführen und erst bei Bedarf mit `--phase if` bzw. `--phase full` in die Modellierung starten.
 - Headless-Modus (`MPLBACKEND=Agg`) verwenden, um lange SHAP-Runs ohne manuelles Eingreifen durchlaufen zu lassen und Logs in `summary-result.md` zu referenzieren.
 
 ### False-Positive-Zahlen richtig einordnen
 - Phase-F arbeitet auf Ereignis-Ebene (`lo2_events.parquet`). Jede Logzeile wird einzeln bewertet.
 - `--if-contamination=0.45` erlaubt dem IsolationForest, bis zu 45 % aller Events als anomal zu markieren. Bei ~386 k Events entstehen so schnell >150 k Einträge in `if_false_positives.txt`, auch wenn Runs insgesamt korrekt sind. Mit `--if-contamination=0.1` sank die FP-Liste zuletzt auf ~44 k Events, blieb aber deutlich über Null, weil weiterhin einzelne Logzeilen in gesunden Runs auffallen.
 - False Positives ≥ 0 sind normal und dienen als „Review-Queue“. Reduziere die Menge, indem du die Kontamination senkst (z. B. 0.05) oder eine Quantilschwelle gemäß Abschnitt „Schwellenkalibrierung“ nutzt.
-- Für Run-/Sequence-Level-Alerts `lo2_sequences.parquet` verwenden (z. B. via `lo2_if_baseline.py`); dort schrumpft das FP-Volumen auf Sequenzen statt einzelne Events.
+- Für Run-/Sequence-Level-Alerts `lo2_sequences.parquet` verwenden; `LO2_samples.py --phase if` schreibt die IF-Scores je Sequenz und reduziert damit das FP-Volumen gegenüber Event-Level-Ausgaben.
 
 ## 1) Daten – konkret erweitern (ohne 540 GB zu ziehen)
 

@@ -197,8 +197,6 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
    - `--phase full` – zusätzlich LR, DecisionTree, Sequenz-LR.
 3. **`demo/lo2_phase_f_explainability.py`** – Reproduziert bestes IF-Setup, erstellt Explainability.
 4. **Spezialskripte:**
-   - `demo/lo2_if_baseline.py` – Aggregierter IF-Ansatz (Run/Testcase/Service-Level).
-   - `demo/lo2_feature_test.py` – Feature Smoke Test.
    - `demo/unsupervised_models.py` – Batch-Auswertung weiterer Algorithmen.
 
 ---
@@ -239,7 +237,7 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
 2. **Drain-Abhängigkeit:** `parse_drain()` kann bei fehlenden Templates scheitern; try/except blendet Fehler aus. Für reproduzierbare Ergebnisse mit Logging ergänzen.
 3. **Persistenz-Automatisierung:** joblib-Dumps erfolgen nicht automatisch; ein CLI-Flag in `LO2_samples.py` könnte das nachrüsten.
 4. **Explainability-Ressourcen:** SHAP kann bei großen Vokabularen speicherintensiv werden; `--shap-sample` bewusst wählen.
-5. **Metrics-Join:** `lo2_if_baseline.py` erwartet `lo2_metrics.parquet`; falls nicht vorhanden, wird es übersprungen (stillschweigend).
+5. **Metrics-Join:** Aggregierte Experimente berücksichtigen `lo2_metrics.parquet` bislang kaum; ein optionaler Join in `LO2_samples.py` steht noch aus.
 6. **Dokumentation:** Ergebnisse und Parameter werden manuell in Markdown gepflegt; eine automatische Laufhistorie wäre wünschenswert.
 
 ---
