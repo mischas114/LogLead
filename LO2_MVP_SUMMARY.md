@@ -118,13 +118,11 @@ The difference between "a loader exists" and "a viable MVP" is exactly what Misc
 
 ## Demo Scripts Provided
 
-Five demo scripts demonstrate the LO2Loader:
+Three demo scripts demonstrate the LO2Loader:
 
 1. **`demo/run_lo2_loader.py`**: Basic loader with CLI configuration
 2. **`demo/LO2_samples.py`**: Complete pipeline (loading → enhancement → detection → explainability)
-3. **`demo/lo2_if_baseline.py`**: Isolation Forest baseline implementation
-4. **`demo/lo2_phase_f_explainability.py`**: Advanced explainability analysis
-5. **`demo/lo2_feature_test.py`**: Feature generation testing
+3. **`demo/lo2_phase_f_explainability.py`**: Advanced explainability analysis
 
 ## Documentation Provided
 
@@ -205,14 +203,12 @@ The LO2Loader has been verified to:
 - `loglead/loaders/__init__.py` - Loader registration
 - `demo/run_lo2_loader.py` (137 lines) - Basic demo
 - `demo/LO2_samples.py` (271 lines) - Complete pipeline demo
-- `demo/lo2_if_baseline.py` (262 lines) - Isolation Forest baseline
 - `demo/lo2_phase_f_explainability.py` (347 lines) - Explainability analysis
-- `demo/lo2_feature_test.py` (167 lines) - Feature testing
 
 ## Total Impact
 
 - **1 new Python class**: LO2Loader (254 lines)
-- **5 demo scripts**: 1,184 lines total
+- **3 demo scripts**: 755 lines total
 - **1 new documentation file**: LO2_MVP_Classes.md (381 lines)
 - **1 updated file**: README.md
 - **Supported OAuth2 services**: 7 (client, code, key, refresh-token, service, token, user)

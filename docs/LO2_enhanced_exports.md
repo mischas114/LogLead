@@ -28,7 +28,7 @@ The core end-to-end flow (Steps 1–5 in `docs/LO2_e2e_pipeline.md`) still expec
 - `lo2_events.parquet`
 - `lo2_sequences.parquet`
 
-Those files are produced during Step 1 by `demo/run_lo2_loader.py --save-parquet`. Later scripts (`LO2_samples.py`, `lo2_if_baseline.py`, `lo2_phase_f_explainability.py`) reapply feature engineering as part of their own processing so they always reflect the latest code. Because of that, the enhanced Parquets are *not* consumed automatically by the MVP scripts.
+Those files are produced during Step 1 by `demo/run_lo2_loader.py --save-parquet`. Later scripts (`LO2_samples.py`, `lo2_phase_f_explainability.py`) reapply feature engineering as part of their own processing so they always reflect the latest code. Because of that, the enhanced Parquets are *not* consumed automatically by the MVP scripts.
 
 Put differently:
 

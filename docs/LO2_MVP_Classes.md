@@ -406,10 +406,7 @@ Complete pipeline demonstration showing:
 - Training anomaly detectors
 - Generating explainability plots
 
-### 3. `demo/lo2_if_baseline.py`
-Isolation Forest baseline implementation for LO2 data
-
-### 4. `demo/lo2_phase_f_explainability.py`
+### 3. `demo/lo2_phase_f_explainability.py`
 Advanced explainability analysis for LO2 anomaly detection
 
 ## Design Decisions
@@ -454,7 +451,7 @@ Potential improvements noted in the code:
   - `loglead/loaders/hdfs.py` (sequence-based logging)
   - `loglead/loaders/nezha.py` (microservice architecture)
   - `loglead/loaders/bgl.py` (timestamp parsing)
-- **Demo Scripts**: `demo/run_lo2_loader.py`, `demo/LO2_samples.py`
+- **Demo Scripts**: `demo/run_lo2_loader.py`, `demo/LO2_samples.py`, `demo/lo2_phase_f_explainability.py`
 - **Architecture Documentation**: `docs/LO2_architektur_detail.md`, `docs/LO2_e2e_pipeline.md`
 
 ## Conclusion

@@ -70,34 +70,7 @@ Artifacts:
 - IsolationForest predictions stored at `--save-if` (default `result/lo2/lo2_if_predictions.parquet`).
 - Console output summarising top anomalies and sample feature rows.
 
-## Step 3 – (Optional) Aggregated Isolation Forest baseline (`demo/lo2_if_baseline.py`)
-Prototype script used for Phase D experiments. It re-aggregates events and trains an Isolation Forest on sequence-level bag-of-words + numeric statistics.
-
-Isolation Forest hyper-parameters that matter here:
-- `contamination` – the share of rows the model should treat as anomalies. Set this close to the true error ratio if you know it (e.g. 0.05 for five percent anomalies). When unsure, 0.1 is a robust default; increase the value if you want the detector to flag more runs for review.
-- `n-estimators` – number of trees in the Isolation Forest. More trees (200–300) stabilise the score ranking but cost extra CPU. Drop to 100 for quick iterations, go higher only if results look noisy across reruns.
-
-```bash
-python demo/lo2_if_baseline.py \
-  --events demo/result/lo2/lo2_events.parquet \
-  --standardize \                                    # scale numeric columns
-  --contamination 0.1 \
-  --n-estimators 200 \
-  --output-scores demo/result/lo2/lo2_if_scores.parquet
-```
-
-Use this when you need sequence-level anomaly scores without running the full Phase E models.
-
-## Step 4 – (Optional) Feature engineering smoke-test (`demo/lo2_feature_test.py`)
-Quick utility to verify the aggregated feature matrix before training. It shares the same helper logic as the baseline script and prints matrix size, label distribution, and vocabulary length.
-
-```bash
-python demo/lo2_feature_test.py \
-  --events demo/result/lo2/lo2_events.parquet \
-  --standardize
-```
-
-## Step 5 – Generate explainability artefacts (`demo/lo2_phase_f_explainability.py`)
+## Step 3 – Generate explainability artefacts (`demo/lo2_phase_f_explainability.py`)
 Consumes the enhanced event table (and optional sequence table) to rebuild the IsolationForest baseline, compute SHAP values for supervised models, and produce NNExplainer mappings.
 
 What happens internally:
@@ -143,8 +116,7 @@ Outputs (under `demo/result/lo2/explainability/`):
 ## Putting It Together
 1. **Load & export** – `run_lo2_loader.py --save-parquet` on the raw LO2 runs.
 2. **Enhance & detect** – `LO2_samples.py --phase full` (or `--phase enhancers` / `--phase if` for partial runs).
-3. **Optional baselines** – `lo2_feature_test.py` and `lo2_if_baseline.py` for additional validation or alternative IF scoring.
-4. **Explainability** – `lo2_phase_f_explainability.py` to create NNExplainer outputs and SHAP plots.
+3. **Explainability** – `lo2_phase_f_explainability.py` to create NNExplainer outputs and SHAP plots.
 
 After step 4 you have a complete chain from raw logs to ranked anomalies with explainability artefacts suitable for reports or downstream integrations. Adjust CLI flags to point at custom input/output directories when embedding the scripts into other environments.
 
