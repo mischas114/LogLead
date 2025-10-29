@@ -219,7 +219,7 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
    - `demo/result/lo2/` enthält alle Parquets.
    - `demo/result/lo2/explainability/` hält XAI-Assets.
    - `models/` sammelt joblib-Dumps.
-4. **Versionierung:** Parameter und Ergebnisse in `docs/LO2_minimal_IF_XAI_workflow.md` protokollieren.
+4. **Versionierung:** Parameter und Ergebnisse in `docs/LO2_e2e_pipeline.md` oder `summary-result.md` protokollieren.
 
 ---
 ## Qualitätssicherung & Tests

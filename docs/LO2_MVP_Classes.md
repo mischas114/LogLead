@@ -205,11 +205,9 @@ The LO2 MVP was implemented by **Mischa Tettenborn** (@mischas114), who created 
 - `demo/lo2_feature_test.py`: Feature matrix validation and sanity checks
 - **Without these**: Users would have no clear starting point; research workflows would need to be built from scratch; critical features like result persistence, metrics tracking, and XAI integration would be missing
 
-**3. Comprehensive Documentation Layer** (5 docs, ~600 lines)
+**3. Comprehensive Documentation Layer** (~600 lines consolidated)
 - `docs/LO2_architektur_detail.md`: Architecture specifications and component interactions
-- `docs/LO2_e2e_pipeline.md`: Complete end-to-end workflow documentation
-- `docs/LO2_minimal_IF_XAI_workflow.md`: Isolation Forest and explainability best practices
-- `docs/LO2_prototype_pipeline.md`: Prototype specifications with component responsibilities
+- `docs/LO2_e2e_pipeline.md`: Unified end-to-end workflow, persistence, and tuning guide
 - `docs/LO2_enhanced_exports.md`: Data persistence and artifact management
 - **Without these**: No understanding of design decisions; no guidance on workflow setup; no reproducibility framework
 

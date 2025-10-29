@@ -156,7 +156,7 @@ explainability/
   if_nn_topk_{items}.csv
   if_fp_hotspots_{service}.txt
 docs/
-  LO2_minimal_IF_XAI_workflow.md   # um Plots/Tabellen ergänzen
+  LO2_e2e_pipeline.md              # um Plots/Tabellen ergänzen
 ```
 
 ---

@@ -144,10 +144,8 @@ Added LO2 to the list of supported loaders with reference to detailed documentat
 ### 3. **Existing LO2 Documentation**
 The following documentation files already exist:
 - `docs/LO2_architektur_detail.md`: Architecture details
-- `docs/LO2_e2e_pipeline.md`: End-to-end pipeline
+- `docs/LO2_e2e_pipeline.md`: Consolidated end-to-end pipeline, persistence, and tuning guide
 - `docs/LO2_enhanced_exports.md`: Enhanced exports
-- `docs/LO2_minimal_IF_XAI_workflow.md`: Isolation Forest and explainability workflow
-- `docs/LO2_prototype_pipeline.md`: Prototype pipeline specification
 - `docs/NEXT_STEPS.md`: Next steps and iteration plans
 
 ## Integration Points
