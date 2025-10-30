@@ -17,7 +17,18 @@ class LO2Loader(BaseLoader):
     - ``polars.DataFrame`` instances produced by ``_process_log_file`` and metrics helpers.
     - Downstream enhancers such as ``EventLogEnhancer``/``SequenceEnhancer`` which expect the emitted schema.
     """
-    def __init__(self, filename, df=None, df_seq=None, n_runs=53, errors_per_run=1, dup_errors=True, single_error_type=None, single_service=""):
+    def __init__(
+        self,
+        filename,
+        df=None,
+        df_seq=None,
+        n_runs=53,
+        errors_per_run=1,
+        dup_errors=True,
+        single_error_type=None,
+        single_service="",
+        service_types=None,
+    ):
         """
         :param filename: Path to the data directory (this is the root where the runs are).
         :param n_runs: Number of runs to process.
@@ -25,17 +36,41 @@ class LO2Loader(BaseLoader):
         :param dup_errors: Whether duplicate errors are allowed across runs.
         :param single_error_type: A specific error type to use exclusively across all runs, or "random" to select one randomly.
         :param single_service: A specific service instead of all to use in the analysis. Options: client, code, key, refresh-token, service, token, user
+        :param service_types: Optional list of services to include. Overrides single_service when provided.
         """
         self.filename = filename
         self.n_runs = n_runs
         self.errors_per_run = errors_per_run
         self.dup_errors = dup_errors
         self.single_error_type = single_error_type
-        if single_service in ["", "client", "code", "key", "refresh-token", "service", "token", "user"]:
-            self.service_type = "oauth2-oauth2-"+single_service
+        valid_services = {"client", "code", "key", "refresh-token", "service", "token", "user"}
+
+        if service_types is not None and not isinstance(service_types, (list, tuple, set)):
+            raise ValueError("service_types must be an iterable of service names when provided.")
+
+        if single_service and service_types:
+            raise ValueError("Provide either single_service or service_types, not both.")
+
+        if service_types:
+            invalid_services = set(service_types) - valid_services
+            if invalid_services:
+                raise ValueError(f"Invalid service type(s) given: {', '.join(sorted(invalid_services))}")
+            self._service_filters = {f"oauth2-oauth2-{svc}" for svc in service_types}
+            print("Service types set:", ", ".join(sorted(service_types)))
+        elif single_service:
+            if single_service not in valid_services:
+                raise ValueError(f"Invalid service type given: {single_service}")
+            self._service_filters = {f"oauth2-oauth2-{single_service}"}
             print("Service type set:", single_service)
         else:
-            print("Invalid service type given!")
+            self._service_filters = None
+            print("Service types set: all")
+
+        # Expose backward-compatible single attribute when only one filter is active.
+        if self._service_filters and len(self._service_filters) == 1:
+            self.service_type = next(iter(self._service_filters))
+        else:
+            self.service_type = None
 
         # Adjust settings if single_error_type is set
         if self.single_error_type:
@@ -108,7 +143,7 @@ class LO2Loader(BaseLoader):
                     if os.path.isdir(test_case_path):
                         for log_file in os.listdir(test_case_path):
                             log_file_path = os.path.join(test_case_path, log_file)
-                            if os.path.isfile(log_file_path) and self.service_type in log_file:
+                            if os.path.isfile(log_file_path) and self._matches_service(log_file):
                                 #print(f"Processing: {log_file_path}")
                                 try:
                                     log_df = self._process_log_file(log_file_path, run, test_case, log_file)
@@ -126,6 +161,11 @@ class LO2Loader(BaseLoader):
             self.df = pl.concat(data, how="vertical").drop_nulls()
             self.df = self.df.with_columns(normal=pl.col("test_case") == "correct")
             self._parse_timestamps()
+
+    def _matches_service(self, filename: str) -> bool:
+        if not self._service_filters:
+            return True
+        return any(service_tag in filename for service_tag in self._service_filters)
 
     def load_metrics(self):
         temporal_metrics = [

@@ -47,6 +47,12 @@ def main() -> None:
         help="Only load log files whose name contains oauth2-oauth2-<service>. Leave empty to use the Loader default.",
     )
     parser.add_argument(
+        "--service-types",
+        nargs="+",
+        choices=["client", "code", "key", "refresh-token", "service", "token", "user"],
+        help="Filter log files to the given service types. Overrides --single-service when provided.",
+    )
+    parser.add_argument(
         "--head",
         type=int,
         default=5,
@@ -79,6 +85,9 @@ def main() -> None:
 
     single_error = args.single_error_type if args.single_error_type else None
 
+    if args.single_service and args.service_types:
+        raise SystemExit("Cannot use --single-service together with --service-types. Pick one of the options.")
+
     loader = LO2Loader(
         filename=str(root),
         n_runs=args.runs,
@@ -86,6 +95,7 @@ def main() -> None:
         dup_errors=args.allow_duplicates or bool(single_error),
         single_error_type=single_error,
         single_service=args.single_service,
+        service_types=args.service_types,
     )
 
     loader.execute()
