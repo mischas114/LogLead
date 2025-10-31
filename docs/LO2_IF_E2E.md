@@ -2,6 +2,30 @@
 
 Dieses Dokument fasst den End-to-End-Ablauf der LO2 Anomalieerkennung zusammen und verweist auf die relevanten Quelltextstellen.
 
+## Voraussetzungen & Einstieg
+
+1. **Rohdaten:** Log-Dateien liegen im lokalen Dateisystem (z. B. `~/data/lo2_logs/`).  
+2. **Loader ausführen:**  
+   ```bash
+   python demo/lo2_e2e/run_lo2_loader.py --root ~/data/lo2_logs --save-parquet --output-dir demo/result/lo2
+   ```  
+   Damit entstehen `demo/result/lo2/lo2_events.parquet` (Events) und optional `lo2_sequences.parquet`.
+3. **Labels:** Der Loader setzt `test_case` (`"correct"`/Fehlername) und `anomaly` (0/1); Fixup: Trainingsdaten enthalten ausschließlich `test_case == "correct"`.
+4. **Hauptskript:**  
+   ```bash
+   python demo/lo2_e2e/LO2_samples.py --phase if --save-model models/lo2_if.joblib
+   ```  
+   Optional `--if-holdout-fraction`, `--if-threshold-percentile`, `--report-*` für Benchmarks.
+
+## Kurzüberblick (Text-Flow)
+
+Loader → Parquet (`lo2_events.parquet`)  
+→ Enhancer (`LO2_samples.py`) bereitet Features vor  
+→ Trainingssplit (`correct` → IF-Training, alle Events → Evaluation)  
+→ Isolation Forest trainiert & scored  
+→ Optional: Hold-out-Schwelle + Metriken  
+→ Artefakte: `lo2_if_predictions.parquet`, `models/lo2_if.joblib`, `model.yml`, `metrics/*.json`
+
 ## 1. Datenaufbereitung
 
 - **Loader**: `demo/lo2_e2e/run_lo2_loader.py` schreibt alle eingelesenen Runs in `demo/result/lo2/lo2_events.parquet` (Events) sowie optional `lo2_sequences.parquet`. Die Spalten `test_case` und `anomaly` werden dabei gesetzt.
