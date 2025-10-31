@@ -479,6 +479,11 @@ import joblib
 from pathlib import Path
 Path("models").mkdir(exist_ok=True)
 joblib.dump((sad.model, sad.vec), "models/lo2_if.joblib")
+
+# Optional: Hold-out + Benchmarking
+# python demo/lo2_e2e/LO2_samples.py --if-holdout-fraction 0.1 --if-threshold-percentile 99.5 \
+#   --report-precision-at 100 --report-fp-alpha 0.005 --report-psi --metrics-dir result/lo2/metrics \
+#   --dump-metadata --save-model models/lo2_if.joblib
 ```
 
 ---

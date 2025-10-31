@@ -64,7 +64,7 @@ Refer back to the demo scripts when you need finer control (e.g., `--phase if` o
 
 ## CLI Flag Reference
 - **Loader:** `--root`, `--runs`, `--errors-per-run`, `--single-service`, `--save-parquet`, `--allow-duplicates`, `--load-metrics`, `--output-dir`.  
-- **Detector:** `--phase {enhancers,if,full}`, `--if-contamination`, `--if-n-estimators`, `--if-item`, `--if-numeric`, `--if-max-samples`, `--save-if`, `--save-enhancers`.  
+- **Detector:** `--phase {enhancers,if,full}`, `--if-contamination`, `--if-n-estimators`, `--if-item`, `--if-numeric`, `--if-max-samples`, `--save-if`, `--save-enhancers`, `--save-model`, `--if-holdout-fraction`, `--if-threshold-percentile`, `--report-precision-at`, `--report-fp-alpha`, `--report-psi`, `--metrics-dir`, `--dump-metadata`.  
 - **Explainability:** `--if-contamination`, `--if-n-estimators`, `--nn-top-k`, `--nn-normal-sample`, `--shap-sample`, `--root`.
 
 ## Persistence & Reuse
@@ -96,6 +96,8 @@ Refer back to the demo scripts when you need finer control (e.g., `--phase if` o
 | `lo2_if_predictions.parquet` | AnomalyDetector | `demo/result/lo2` | IF scores, ranks, predictions |
 | `result/lo2/enhanced/*.parquet` | LO2_samples.py (`--save-enhancers`) | `result/lo2/enhanced` | Optional cache of engineered features |
 | `models/lo2_if.joblib` | `LO2_samples.py --save-model` | `models/` | Isolation Forest + vectoriser bundle |
+| `result/lo2/metrics/if_metrics.{json,csv}` | `LO2_samples.py --report-*` | `result/lo2/metrics` | Precision@k, FP-Rate, PSI |
+| `models/model.yml` | `LO2_samples.py --dump-metadata` | `models/` | Snapshot of params + threshold |
 | `result/lo2/explainability/*` | lo2_phase_f_explainability.py | `demo/result/lo2/explainability` | NN mapping, SHAP plots, metrics |
 
 ## Known Limitations & Next Steps

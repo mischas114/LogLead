@@ -1,0 +1,18 @@
+generated_at: 2025-10-31T09:24:53.604188Z
+training_rows: 49852
+holdout_rows: 5539
+if_params:
+  item_list_col: e_words
+  numeric_cols:
+  contamination: 0.1
+  n_estimators: 200
+  max_samples: auto
+threshold: 0.3362046337140118
+threshold_percentile: 0.995
+metrics:
+  threshold_value: 0.3362046337140118
+  threshold_percentile: 0.995
+  precision_at_100: 0.0
+  fp_rate_at_0.005: 0.0065895181527685
+  psi_train_vs_holdout: 0.07040686177852953
+git_commit: af156d390bf9bb38b8924f3927ca5daba405cfbb

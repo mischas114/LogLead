@@ -1,9 +1,15 @@
 """LO2 demo pipeline for enhancement, anomaly detection, and explainability."""
 
+from __future__ import annotations
+
 import argparse
+import csv
+import json
 import os
 import random
+import subprocess
 from pathlib import Path
+from datetime import datetime
 
 import polars as pl
 
@@ -11,6 +17,13 @@ from loglead import AnomalyDetector
 from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
 import loglead.explainer as ex
 import joblib
+import numpy as np
+
+from metrics_utils import (
+    false_positive_rate_at_alpha,
+    population_stability_index,
+    precision_at_k,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,7 +102,76 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Allow replacing an existing model dump when --save-model is provided.",
     )
+    parser.add_argument(
+        "--if-holdout-fraction",
+        type=float,
+        default=0.0,
+        help="Optional fraction (0-0.5) of 'correct' events reserved as temporal hold-out.",
+    )
+    parser.add_argument(
+        "--if-threshold-percentile",
+        type=float,
+        default=None,
+        help="Optional percentile (e.g. 99.5) to derive a score threshold from the hold-out set.",
+    )
+    parser.add_argument(
+        "--report-precision-at",
+        type=int,
+        default=None,
+        help="Report Precision@k for the IF scores (requires anomaly labels).",
+    )
+    parser.add_argument(
+        "--report-fp-alpha",
+        type=float,
+        default=None,
+        help="Report False-Positive rate at the top alpha fraction (e.g. 0.005 for 0.5%%).",
+    )
+    parser.add_argument(
+        "--report-psi",
+        action="store_true",
+        help="Report Population Stability Index between train and hold-out scores.",
+    )
+    parser.add_argument(
+        "--metrics-dir",
+        type=Path,
+        default=Path("result/lo2/metrics"),
+        help="Directory for optional metric reports (CSV/JSON).",
+    )
+    parser.add_argument(
+        "--dump-metadata",
+        action="store_true",
+        help="Write a model.yml snapshot alongside the joblib artefact.",
+    )
     return parser.parse_args()
+
+
+def _transform_with_detector(detector: AnomalyDetector, df: pl.DataFrame):
+    """Vectorize a new dataframe using an already-fitted detector."""
+    if df is None or df.is_empty():
+        return None
+    X, _, _ = detector._prepare_data(df, detector.vec)  # type: ignore[attr-defined]
+    return X
+
+
+def _dict_to_yaml_lines(payload: dict, indent: int = 0) -> list[str]:
+    """Minimal YAML serializer (avoids extra dependency)."""
+    lines: list[str] = []
+    pad = "  " * indent
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            lines.append(f"{pad}{key}:")
+            lines.extend(_dict_to_yaml_lines(value, indent + 1))
+        elif isinstance(value, list):
+            lines.append(f"{pad}{key}:")
+            for item in value:
+                if isinstance(item, dict):
+                    lines.append(f"{pad}  -")
+                    lines.extend(_dict_to_yaml_lines(item, indent + 2))
+                else:
+                    lines.append(f"{pad}  - {item}")
+        else:
+            lines.append(f"{pad}{key}: {value}")
+    return lines
 
 
 def main() -> None:
@@ -197,7 +279,24 @@ def main() -> None:
     print("\nTraining Isolation Forest on event words (Phase D)")
     numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
     sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
-    sad_if.train_df = df_events.filter(pl.col("test_case") == "correct")
+    correct_events = df_events.filter(pl.col("test_case") == "correct")
+    holdout_fraction = min(max(args.if_holdout_fraction, 0.0), 0.5)
+    holdout_df = None
+    if holdout_fraction > 0 and correct_events.height > 1:
+        if "m_timestamp" in correct_events.columns:
+            sorted_correct = correct_events.sort("m_timestamp")
+        else:
+            sorted_correct = correct_events.sort("seq_id")
+        holdout_size = max(1, int(sorted_correct.height * holdout_fraction))
+        if holdout_size >= sorted_correct.height:
+            holdout_size = sorted_correct.height - 1
+        if holdout_size > 0:
+            holdout_df = sorted_correct.tail(holdout_size)
+            correct_events = sorted_correct.head(sorted_correct.height - holdout_size)
+            print(
+                f"Using temporal hold-out: {holdout_size} events reserved ({holdout_fraction * 100:.2f}% of correct runs)."
+            )
+    sad_if.train_df = correct_events
     sad_if.test_df = df_events
     sad_if.prepare_train_test_data()
 
@@ -226,6 +325,35 @@ def main() -> None:
     print("Top 5 IF-Runs (höchster Score zuerst):")
     print(pred_if.sort("score_if", descending=True).head(5))
 
+    train_scores = (-sad_if.model.score_samples(sad_if.X_train_no_anos)).tolist()
+    holdout_scores = None
+    if holdout_df is not None:
+        holdout_matrix = _transform_with_detector(sad_if, holdout_df)
+        if holdout_matrix is not None:
+            holdout_scores = (-sad_if.model.score_samples(holdout_matrix)).tolist()
+
+    threshold_value = None
+    threshold_percentile = None
+    if args.if_threshold_percentile is not None:
+        percentile = args.if_threshold_percentile
+        if percentile <= 1:
+            percentile *= 100
+        percentile = max(0.0, min(percentile, 100.0))
+        source_scores = holdout_scores or train_scores
+        if source_scores:
+            threshold_value = float(np.percentile(source_scores, percentile))
+            threshold_percentile = percentile / 100.0
+            print(
+                f"Derived IF score threshold: {threshold_value:.6f} (percentile {percentile:.2f})"
+            )
+        else:
+            print("Threshold percentile requested, but no scores available to calibrate.")
+
+    if threshold_value is not None:
+        pred_if = pred_if.with_columns(
+            (pl.col("score_if") >= threshold_value).alias("pred_if_threshold")
+        )
+
     save_if_path = args.save_if
     if not save_if_path.is_absolute():
         save_if_path = (orig_cwd / save_if_path).resolve()
@@ -235,6 +363,48 @@ def main() -> None:
     else:
         pred_if.write_parquet(save_if_path)
     print(f"IsolationForest-Ergebnis gespeichert unter {save_if_path}")
+
+    metrics_results = {}
+    if threshold_value is not None:
+        metrics_results["threshold_value"] = threshold_value
+        metrics_results["threshold_percentile"] = threshold_percentile
+    if args.report_precision_at:
+        precision_val = precision_at_k(pred_if, args.report_precision_at)
+        if precision_val is not None:
+            metrics_results[f"precision_at_{args.report_precision_at}"] = precision_val
+        else:
+            print("Precision@k requested, but insufficient data to compute.")
+
+    if args.report_fp_alpha:
+        fp_val = false_positive_rate_at_alpha(pred_if, args.report_fp_alpha)
+        if fp_val is not None:
+            metrics_results[f"fp_rate_at_{args.report_fp_alpha}"] = fp_val
+        else:
+            print("FP-rate@alpha requested, but insufficient data to compute.")
+
+    if args.report_psi:
+        if holdout_scores:
+            psi_val = population_stability_index(train_scores, holdout_scores)
+            if psi_val is not None:
+                metrics_results["psi_train_vs_holdout"] = psi_val
+        else:
+            print("PSI requested, but hold-out scores are unavailable.")
+
+    if metrics_results:
+        metrics_dir = args.metrics_dir
+        if not metrics_dir.is_absolute():
+            metrics_dir = (orig_cwd / metrics_dir).resolve()
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        metrics_json = metrics_dir / "if_metrics.json"
+        metrics_csv = metrics_dir / "if_metrics.csv"
+        with metrics_json.open("w", encoding="utf-8") as fh:
+            json.dump(metrics_results, fh, indent=2)
+        with metrics_csv.open("w", encoding="utf-8", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["metric", "value"])
+            for key, value in metrics_results.items():
+                writer.writerow([key, value])
+        print(f"IF metrics gespeichert unter {metrics_json} und {metrics_csv}")
 
     if args.save_model:
         model_path = args.save_model
@@ -247,6 +417,43 @@ def main() -> None:
             )
         joblib.dump((sad_if.model, sad_if.vec), model_path)
         print(f"IsolationForest-Modell + Vectorizer gespeichert unter {model_path}")
+
+        if args.dump_metadata:
+            metadata = {
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "training_rows": sad_if.train_df.height if sad_if.train_df is not None else 0,
+                "holdout_rows": holdout_df.height if holdout_df is not None else 0,
+                "if_params": {
+                    "item_list_col": args.if_item,
+                    "numeric_cols": numeric_cols,
+                    "contamination": args.if_contamination,
+                    "n_estimators": args.if_n_estimators,
+                    "max_samples": args.if_max_samples,
+                },
+                "threshold": threshold_value,
+                "threshold_percentile": threshold_percentile,
+                "metrics": metrics_results,
+            }
+            try:
+                git_commit = (
+                    subprocess.run(
+                        ["git", "rev-parse", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    ).stdout.strip()
+                )
+                metadata["git_commit"] = git_commit
+            except Exception:
+                metadata["git_commit"] = "unknown"
+
+            metadata_lines = _dict_to_yaml_lines(metadata)
+            metadata_path = model_path.with_name("model.yml")
+            with metadata_path.open("w", encoding="utf-8") as fh:
+                fh.write("\n".join(metadata_lines) + "\n")
+            print(f"Metadata YAML gespeichert unter {metadata_path}")
+    elif args.dump_metadata:
+        print("Warnung: --dump-metadata benötigt --save-model, wird übersprungen.")
 
     if args.phase == "if":
         print("\nIsolation Forest abgeschlossen. Weitere Modelle übersprungen.")
