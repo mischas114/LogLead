@@ -128,3 +128,110 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 - Drain-ID-Features plus numerische Längen senken die IF-AUC nicht weiter, liefern aber keine substanzielle Verbesserung. Höhere Kontamination verschiebt lediglich den Schwellenwert.
 - Nächste Tests sollten Normalanteil im Training erhöhen (mehr `correct`-Runs laden oder Fehlerläufe drosseln), zusätzliche numerische Sequenzfeatures (`seq_len`, Dauer) zum IF hinzufügen und `--if-max-samples` begrenzen, um Übergewicht großer Runs zu vermeiden.
 - Für Explainability genügt der MVP weiterhin – SHAP/NN-Mapping entstehen reproduzierbar. Die Modellqualität bleibt jedoch das zentrale Problem.
+
+
+python demo/lo2_e2e/run_lo2_loader.py \
+    --root /Volumes/LO2_DATA/lo2-extracted \
+    --errors-per-run 1 \
+    --service-types code token refresh-token \
+    --save-parquet \
+    --output-dir demo/result/lo2
+
+
+python demo/lo2_e2e/LO2_samples.py \
+  --phase full \
+  --if-max-samples 100000 \
+  --if-contamination 0.1 \
+  --if-threshold-percentile 99.5 \
+  --report-precision-at 200 \
+  --report-fp-alpha 0.01 \
+  --save-if demo/result/lo2/lo2_if_predictions.parquet \
+  --metrics-dir demo/result/lo2/metrics \
+  --save-model demo/result/lo2/models/lo2_if.joblib \
+  --dump-metadata
+
+python demo/lo2_e2e/LO2_samples.py \
+  --phase full \
+  --if-holdout-fraction 0.05 \
+  --if-item e_event_drain_id \
+  --if-numeric e_chars_len,e_event_id_len,e_words_len,e_lines_len \
+  --if-max-samples 261748 \
+  --if-contamination 0.25 \
+  --if-threshold-percentile 99.5 \
+  --report-precision-at 200 \
+  --report-fp-alpha 0.01 \
+  --save-if demo/result/lo2/lo2_if_predictions.parquet \
+  --metrics-dir demo/result/lo2/metrics \
+  --save-model demo/result/lo2/models/lo2_if.joblib \
+  --overwrite-model \
+  --dump-metadata
+
+python demo/lo2_e2e/lo2_phase_f_explainability.py \
+  --root demo/result/lo2 \
+  --if-max-samples 100000 \
+  --nn-top-k 0 \
+  --nn-normal-sample 0 \
+  --shap-sample 0
+
+
+  Hier sind die aktualisierten Doku-Abschnitte, inkl. Quellen, PR-Text und Commit-Message.
+
+docs/NEXT_STEPS_IF.md
+
+<!-- AUTOGEN:IF_NEXT_STEPS:BEGIN -->
+## Isolation Forest: Status & nächste Schritte
+
+**Kurzfazit:** Der unsupervised IF liefert auf LO2 keine verwertbare Diskriminationsleistung (F1 ≈ 0.12; AUC ≈ 0.51), obwohl Drain-IDs, erweiterte numerische Features, `max_samples` = 261748 und ein 5 %-Holdout aktiv sind.
+
+**Metriken (IF)**  
+| Laufzeit | AUC | F1 | Precision | Recall | contamination | max_samples | n_samples |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2025-10-31 18:36:46Z | 0.51 | 0.12 | 0.08 | 0.25 | 0.25 | 261748 | 299115 |
+
+**Vergleich (Supervised Benchmarks)**  
+| Modell | AUC | F1 | Notizen |
+|---|---:|---:|---|
+| Logistic Regression | 1.00 | 0.88 | Training/Test auf kompletten Featuresatz (`e_words`); Schwellen-Tuning möglich |
+| Decision Tree | 1.00 | 1.00 | Vollständige Trennbarkeit auf `e_trigrams` |
+
+**Interpretation:** IF passt nicht zur LO2-Verteilung (viele Error-Runs, sehr ähnliche Text-Tokens). Das Log-Statement „Downsampling occurred: yes“ erklärt sich durch den 5 %-Holdout, nicht durch Trainings-Downsampling.
+
+**Nächste Schritte:**  
+- IF als Demonstrator belassen, Resultate dokumentieren.  
+- Optional: IF-Sweep mit `contamination ∈ {0.30, 0.35}` durchführen.  
+- Benchmarks: LR/DT als Referenz pflegen und für LR ein Schwellen-Tuning zur Alert-Steuerung zeigen.
+
+**Quellen/Artefakte:**  
+- `demo/result/lo2/metrics/if_metrics.json`  
+- `demo/result/lo2/metrics/lr_full.json`  
+- `demo/result/lo2/metrics/dt_full.json`  
+- Commit: 1b9fcbc22c87b95051e82074e71ef3ae4e5a11e9  
+<!-- AUTOGEN:IF_NEXT_STEPS:END -->
+docs/LO2_e2e_pipeline.md
+
+<!-- AUTOGEN:LO2_STATUS:BEGIN -->
+## Aktueller Modellstatus
+
+**Pipeline-Änderungen:**  
+- Drain-IDs aktiv; numerische Features um `e_chars_len`, `e_event_id_len`, `e_words_len`, `e_lines_len` ergänzt.  
+- `max_samples` für den IF auf 261748 hochgesetzt; 5 %-Holdout (temporal) eingeführt.  
+- Benchmarks (LR/DT) erneuert und zentral abgelegt.
+
+**Metrik-Überblick:**  
+- Isolation Forest (unsupervised): AUC ≈ 0.51, F1 ≈ 0.12 → geringe Trennschärfe.  
+- Logistic Regression: AUC ≈ 1.00, F1 ≈ 0.88.  
+- Decision Tree: AUC ≈ 1.00, F1 ≈ 1.00.
+
+**Hinweis zum Summary:**  
+„Downsampling occurred: yes“ stammt vom 5 %-Holdout (Reserve), nicht von verkleinerten Trainingsdaten.
+
+**Empfehlung:**  
+LR/DT als produktionsnahe Benchmarks führen; der IF bleibt als Lehr-/Demo-Artefakt mit dokumentierten Grenzen bestehen.  
+<!-- AUTOGEN:LO2_STATUS:END -->
+PR-Beschreibung (Kurzform)
+
+Was: IF-Metriken mit Drain-ID/Feature-Erweiterungen eingepflegt, schwache Performance tabellarisch belegt. LR/DT-Benchmarks aus demo/result/lo2/metrics/*.json hervorgehoben. Holdout-Hinweis ergänzt („Downsampling occurred: yes“ = 5 % Reserve). Nächste Schritte (IF-contamination-Sweep, LR-Threshold-Tuning) dokumentiert.
+Warum: Vollständige Nachvollziehbarkeit der aktuellen Runs, klare Handlungsempfehlungen trotz schwacher IF-Ergebnisse.
+Quellen: demo/result/lo2/metrics/if_metrics.json, demo/result/lo2/metrics/lr_full.json, demo/result/lo2/metrics/dt_full.json, Commit 1b9fcbc22c87b95051e82074e71ef3ae4e5a11e9.
+Commit-Message
+
