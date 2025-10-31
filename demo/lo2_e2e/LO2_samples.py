@@ -174,6 +174,11 @@ def _dict_to_yaml_lines(payload: dict, indent: int = 0) -> list[str]:
     return lines
 
 
+def _log_train_fraction(label: str, train_rows: int, total_rows: int) -> None:
+    frac = train_rows / max(total_rows, 1)
+    print(f"[TrainStats] {label}: train_rows={train_rows} total_rows={total_rows} fraction={frac:.4f}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -210,11 +215,8 @@ def main() -> None:
     else:
         print("No lo2_sequences.parquet found; continuing with event-only workflow.")
 
-    # Optional down-sampling for quick experimentation.
-    MAX_EVENTS = 200_000
-    if len(df_events) > MAX_EVENTS:
-        print(f"Sampling down to {MAX_EVENTS} events for faster demos.")
-        df_events = df_events.sample(n=MAX_EVENTS, seed=args.sample_seed)
+    downsampling_performed = False
+    train_stats: list[tuple[str, int, int]] = []
 
     print("\nEnhancing events (normalization, tokens, parsers, lengths)...")
     enhancer = EventLogEnhancer(df_events)
@@ -297,6 +299,7 @@ def main() -> None:
             print(
                 f"Using temporal hold-out: {holdout_size} events reserved ({holdout_fraction * 100:.2f}% of correct runs)."
             )
+            downsampling_performed = True
     sad_if.train_df = correct_events
     sad_if.test_df = df_events
     sad_if.prepare_train_test_data()
@@ -463,30 +466,47 @@ def main() -> None:
     print("\nTraining anomaly detector on events (words)")
     sad = AnomalyDetector()
     sad.item_list_col = "e_words"
-    sad.test_train_split(df_events, test_frac=0.90)
+    sad.train_df = df_events
+    sad.test_df = df_events
     sad.prepare_train_test_data()
     sad.train_LR()
     df_pred = sad.predict()
     print("Event-level predictions ready.")
+    train_stats.append(("event_lr_words", sad.train_df.height if sad.train_df is not None else 0, df_events.height))
+    _log_train_fraction("event_lr_words", sad.train_df.height if sad.train_df is not None else 0, df_events.height)
 
     print("Switching to trigrams + DecisionTree")
     sad.item_list_col = "e_trigrams"
+    sad.train_df = df_events
+    sad.test_df = df_events
     sad.prepare_train_test_data()
     sad.train_DT()
     df_pred = sad.predict()
+    train_stats.append(("event_dt_trigrams", sad.train_df.height if sad.train_df is not None else 0, df_events.height))
+    _log_train_fraction("event_dt_trigrams", sad.train_df.height if sad.train_df is not None else 0, df_events.height)
 
     if df_seqs is not None and len(df_seqs):
         print("\nSequence-level anomaly detection with duration + length")
         sad_seq = AnomalyDetector()
         sad_seq.numeric_cols = ["seq_len", "duration_sec"]
-        sad_seq.test_train_split(df_seqs, test_frac=0.90)
+        sad_seq.train_df = df_seqs
+        sad_seq.test_df = df_seqs
+        sad_seq.prepare_train_test_data()
         sad_seq.train_LR()
         seq_pred = sad_seq.predict()
         print("Sequence-level predictions ready.")
+        train_stats.append(
+            ("sequence_lr_numeric", sad_seq.train_df.height if sad_seq.train_df is not None else 0, df_seqs.height)
+        )
+        _log_train_fraction(
+            "sequence_lr_numeric", sad_seq.train_df.height if sad_seq.train_df is not None else 0, df_seqs.height
+        )
 
         print("\nExplaining sequence model via SHAP (words vectorizer)")
         sad_seq.item_list_col = "e_words"
         sad_seq.numeric_cols = None
+        sad_seq.train_df = df_seqs
+        sad_seq.test_df = df_seqs
         sad_seq.prepare_train_test_data()
         sad_seq.train_LR()
         seq_pred = sad_seq.predict()
@@ -495,6 +515,12 @@ def main() -> None:
         explainer.plot(plottype="summary")
     else:
         print("\nNo sequence table available; skipping sequence-level AD and XAI.")
+
+    print("\n[Summary] Full-data pipeline diagnostics:")
+    for label, train_rows, total_rows in train_stats:
+        frac = train_rows / max(total_rows, 1)
+        print(f"  {label}: train_rows={train_rows} total_rows={total_rows} fraction={frac:.4f}")
+    print(f"[Summary] Downsampling occurred: {'yes' if downsampling_performed else 'no'}")
 
     print("\nLO2 sample pipeline complete.")
 

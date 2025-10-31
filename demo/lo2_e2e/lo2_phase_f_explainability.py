@@ -55,20 +55,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--shap-sample",
         type=int,
-        default=200,
-        help="Maximale Anzahl Beispiele für die SHAP-Berechnung (beschleunigt Plot-Erstellung).",
+        default=0,
+        help="Maximale Anzahl Beispiele für die SHAP-Berechnung (0 = keine Begrenzung).",
     )
     parser.add_argument(
         "--nn-top-k",
         type=int,
-        default=50,
-        help="Wie viele anomal markierte Events für das NN-Mapping berücksichtigt werden (Top nach Score).",
+        default=0,
+        help="Wie viele anomal markierte Events für das NN-Mapping berücksichtigt werden (0 = alle).",
     )
     parser.add_argument(
         "--nn-normal-sample",
         type=int,
-        default=200,
-        help="Wie viele Normalfälle ergänzend gesampelt werden (stochastisch, zur Referenzsuche).",
+        default=0,
+        help="Wie viele Normalfälle ergänzend berücksichtigt werden (0 = alle).",
     )
     return parser.parse_args()
 
@@ -107,7 +107,10 @@ def run_event_enhancers(df_events: pl.DataFrame) -> pl.DataFrame:
 
 def train_if(df_events: pl.DataFrame, args: argparse.Namespace):
     numeric_cols = ["e_chars_len", "e_event_id_len", "e_words_len"]
-    sad_if = AnomalyDetector(item_list_col="e_event_drain_id", numeric_cols=numeric_cols)
+    item_col = "e_event_drain_id" if "e_event_drain_id" in df_events.columns else "e_words"
+    if item_col != "e_event_drain_id":
+        print("[INFO] Drain IDs unavailable; falling back to e_words for IsolationForest.")
+    sad_if = AnomalyDetector(item_list_col=item_col, numeric_cols=numeric_cols)
     sad_if.train_df = df_events.filter(pl.col("test_case") == "correct")
     sad_if.test_df = df_events
     sad_if.prepare_train_test_data()
@@ -130,6 +133,8 @@ def train_if(df_events: pl.DataFrame, args: argparse.Namespace):
     score_if = (-sad_if.model.score_samples(sad_if.X_test)).tolist()
     pred_if = pred_if.with_columns(pl.Series("score_if", score_if))
     pred_if = pred_if.with_columns(pl.col("score_if").rank("dense", descending=True).alias("rank_if"))
+    if "row_id" in pred_if.columns:
+        pred_if = pred_if.drop("row_id")
     pred_if = pred_if.with_row_index(name="row_id")
     return sad_if, pred_if
 
@@ -140,16 +145,20 @@ def build_nn_mapping(
     out_dir: Path,
     top_k: int,
     normal_sample: int,
-) -> None:
-    anomalies = pred_if.filter(pl.col("pred_ano") == 1).sort("score_if", descending=True).head(top_k)
+) -> tuple[int, int]:
+    anomalies = pred_if.filter(pl.col("pred_ano") == 1).sort("score_if", descending=True)
+    if top_k > 0 and anomalies.height > top_k:
+        anomalies = anomalies.head(top_k)
     if anomalies.is_empty():
         print("[WARN] Keine Anomalien für das NN-Mapping vorhanden – Schritt übersprungen.")
-        return
+        return (0, 0)
 
-    normals = pred_if.filter(pl.col("pred_ano") == 0)
-    if normals.height > normal_sample > 0:
-        normals = normals.sample(normal_sample, seed=42)
-    normals = normals.sort("score_if", descending=True)
+    normals = pred_if.filter(pl.col("pred_ano") == 0).sort("score_if", descending=True)
+    if normal_sample > 0 and normals.height > normal_sample:
+        normals = normals.head(normal_sample)
+
+    actual_top = anomalies.height
+    actual_normals = normals.height
 
     subset = pl.concat([anomalies, normals], how="vertical").unique("row_id")
     indices = [int(idx) for idx in subset["row_id"].to_list()]
@@ -177,6 +186,12 @@ def build_nn_mapping(
             )
         write_lines(out_dir / "if_false_positives.txt", fp_text)
         print(f"[INFO] False-Positive-Liste geschrieben: {out_dir / 'if_false_positives.txt'}")
+
+    print(
+        f"[Explainability] NN mapping uses anomalies={actual_top} normals={actual_normals} "
+        f"(requested top_k={top_k}, normal_sample={normal_sample})"
+    )
+    return actual_top, actual_normals
 
 
 def compute_metrics(sad: AnomalyDetector) -> dict:
@@ -221,46 +236,58 @@ def plot_shap(explainer: ShapExplainer, out_prefix: Path) -> None:
     print(f"[INFO] SHAP Bar Plot: {bar_path}")
 
 
-def run_event_lr_shap(df_events: pl.DataFrame, out_dir: Path, sample_size: int) -> dict:
+def run_event_lr_shap(
+    df_events: pl.DataFrame, out_dir: Path, sample_size: int
+) -> tuple[dict, int, int]:
     sad = AnomalyDetector()
     sad.item_list_col = "e_words"
-    sad.test_train_split(df_events, test_frac=0.90)
+    sad.train_df = df_events
+    sad.test_df = df_events
     sad.prepare_train_test_data()
     sad.train_LR()
     _ = sad.predict()
 
     shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    size = min(sample_size, sad.X_test.shape[0])
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
     save_top_features(shap_expl, 20, out_dir / "lr_top_tokens.txt")
     plot_shap(shap_expl, out_dir / "lr_shap")
     metrics = compute_metrics(sad)
     save_json(out_dir / "metrics_lr.json", metrics)
-    return metrics
+    print(f"[Explainability] LR SHAP samples: {size} of {total} (requested {sample_size})")
+    return metrics, size, total
 
 
-def run_event_dt_shap(df_events: pl.DataFrame, out_dir: Path, sample_size: int) -> dict:
+def run_event_dt_shap(
+    df_events: pl.DataFrame, out_dir: Path, sample_size: int
+) -> tuple[dict, int, int]:
     sad = AnomalyDetector()
     sad.item_list_col = "e_trigrams"
-    sad.test_train_split(df_events, test_frac=0.90)
+    sad.train_df = df_events
+    sad.test_df = df_events
     sad.prepare_train_test_data()
     sad.train_DT()
     _ = sad.predict()
 
     shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    size = min(sample_size, sad.X_test.shape[0])
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
     save_top_features(shap_expl, 20, out_dir / "dt_top_trigrams.txt")
     plot_shap(shap_expl, out_dir / "dt_shap")
     metrics = compute_metrics(sad)
     save_json(out_dir / "metrics_dt.json", metrics)
-    return metrics
+    print(f"[Explainability] DT SHAP samples: {size} of {total} (requested {sample_size})")
+    return metrics, size, total
 
 
-def run_sequence_lr_shap(df_events: pl.DataFrame, df_seq: pl.DataFrame | None, out_dir: Path, sample_size: int) -> dict | None:
+def run_sequence_lr_shap(
+    df_events: pl.DataFrame, df_seq: pl.DataFrame | None, out_dir: Path, sample_size: int
+) -> tuple[dict | None, int, int]:
     if df_seq is None or df_seq.is_empty():
         print("[INFO] Keine Sequenz-Parquet-Datei gefunden – Sequenz-SHAP übersprungen.")
-        return None
+        return None, 0, 0
 
     seq_enhancer = SequenceEnhancer(df=df_events, df_seq=df_seq)
     df_seq = seq_enhancer.seq_len()
@@ -287,14 +314,16 @@ def run_sequence_lr_shap(df_events: pl.DataFrame, df_seq: pl.DataFrame | None, o
             ],
         )
         print(f"[INFO] Sequence-SHAP übersprungen (nur numerische Features); Hinweis unter {note_path}")
-        return metrics
+        return metrics, 0, sad.X_test.shape[0]
 
     shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    size = min(sample_size, sad.X_test.shape[0])
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
     save_top_features(shap_expl, 20, out_dir / "seq_lr_top_features.txt")
     plot_shap(shap_expl, out_dir / "seq_lr_shap")
-    return metrics
+    print(f"[Explainability] Sequence LR SHAP samples: {size} of {total} (requested {sample_size})")
+    return metrics, size, total
 
 
 def main() -> None:
@@ -319,7 +348,7 @@ def main() -> None:
     print(f"[INFO] IF-Predictions gespeichert: {pred_if_path}")
 
     print("[INFO] Berechne NNExplainer Mapping …")
-    build_nn_mapping(
+    nn_top_used, nn_normal_used = build_nn_mapping(
         pred_if,
         sad_if,
         out_dir,
@@ -328,17 +357,39 @@ def main() -> None:
     )
 
     print("[INFO] Berechne SHAP für Logistic Regression …")
-    lr_metrics = run_event_lr_shap(df_events, out_dir, args.shap_sample)
+    lr_metrics, lr_shap_used, lr_total = run_event_lr_shap(df_events, out_dir, args.shap_sample)
     print(f"[INFO] LR-Metriken: {lr_metrics}")
 
     print("[INFO] Berechne SHAP für Decision Tree …")
-    dt_metrics = run_event_dt_shap(df_events, out_dir, args.shap_sample)
+    dt_metrics, dt_shap_used, dt_total = run_event_dt_shap(df_events, out_dir, args.shap_sample)
     print(f"[INFO] DT-Metriken: {dt_metrics}")
 
     df_seq = pl.read_parquet(seq_path) if seq_path.exists() else None
-    seq_metrics = run_sequence_lr_shap(df_events, df_seq, out_dir, args.shap_sample)
+    seq_metrics, seq_shap_used, seq_total = run_sequence_lr_shap(df_events, df_seq, out_dir, args.shap_sample)
     if seq_metrics:
         print(f"[INFO] Sequence-LR-Metriken: {seq_metrics}")
+
+    total_anomalies = pred_if.filter(pl.col("pred_ano") == 1).height
+    total_normals = pred_if.filter(pl.col("pred_ano") == 0).height
+    downsampling_performed = False
+    if (lr_total and lr_shap_used < lr_total) or (dt_total and dt_shap_used < dt_total):
+        downsampling_performed = True
+    if seq_total and seq_shap_used < seq_total:
+        downsampling_performed = True
+    if nn_top_used and nn_top_used < total_anomalies:
+        downsampling_performed = True
+    if nn_normal_used and nn_normal_used < total_normals:
+        downsampling_performed = True
+
+    print("\n[Summary] Explainability diagnostics:")
+    print(
+        f"  lr_shap_samples={lr_shap_used} total={lr_total} | dt_shap_samples={dt_shap_used} total={dt_total}"
+    )
+    print(f"  seq_shap_samples={seq_shap_used} total={seq_total}")
+    print(
+        f"  nn_top_used={nn_top_used} of {total_anomalies} anomalies | nn_normals_used={nn_normal_used} of {total_normals}"
+    )
+    print(f"[Summary] Downsampling occurred: {'yes' if downsampling_performed else 'no'}")
 
     print("[INFO] Phase-F-Artefakte fertig.")
 

@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 
 import polars as pl
@@ -24,17 +25,30 @@ def main() -> None:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--root", required=True, help="Path to the root directory that contains the LO2 runs.")
-    parser.add_argument("--runs", type=int, default=5, help="Number of runs to scan before stopping.")
+    parser.add_argument(
+        "--runs",
+        type=int,
+        default=None,
+        help="Number of runs to scan before stopping (None oder ≤0 = alle).",
+    )
     parser.add_argument(
         "--errors-per-run",
         type=int,
-        default=1,
-        help="How many error directories to sample per run (ignored when single-error-type is set).",
+        default=None,
+        help="How many error directories to include per run (None oder ≤0 = alle).",
     )
     parser.add_argument(
         "--allow-duplicates",
         action="store_true",
-        help="Permit the same error type to appear across multiple runs (matches LO2Loader default).",
+        dest="allow_duplicates",
+        default=True,
+        help="Permit the same error type to appear across multiple runs.",
+    )
+    parser.add_argument(
+        "--no-duplicates",
+        action="store_false",
+        dest="allow_duplicates",
+        help="Disable duplicate error sampling across runs.",
     )
     parser.add_argument(
         "--single-error-type",
@@ -88,10 +102,18 @@ def main() -> None:
     if args.single_service and args.service_types:
         raise SystemExit("Cannot use --single-service together with --service-types. Pick one of the options.")
 
+    UNLIMITED_SENTINEL = 10**9
+    runs_limit = args.runs if args.runs and args.runs > 0 else UNLIMITED_SENTINEL
+    errors_limit = args.errors_per_run if args.errors_per_run and args.errors_per_run > 0 else UNLIMITED_SENTINEL
+    print(f"[Loader] Run limit: {'unlimited' if runs_limit >= UNLIMITED_SENTINEL else runs_limit}")
+    print(
+        f"[Loader] Errors per run limit: {'unlimited' if errors_limit >= UNLIMITED_SENTINEL else errors_limit}"
+    )
+
     loader = LO2Loader(
         filename=str(root),
-        n_runs=args.runs,
-        errors_per_run=args.errors_per_run,
+        n_runs=runs_limit,
+        errors_per_run=errors_limit,
         dup_errors=args.allow_duplicates or bool(single_error),
         single_error_type=single_error,
         single_service=args.single_service,
@@ -126,6 +148,29 @@ def main() -> None:
     print("\nRuns present:", loader.df.select(pl.col("run").unique()).to_series().to_list())
     print("Test cases present:", loader.df.select(pl.col("test_case").unique()).to_series().to_list())
     print("Services present:", loader.df.select(pl.col("service").unique()).to_series().to_list())
+
+    total_runs_available = sum(1 for entry in root.iterdir() if entry.is_dir())
+    runs_loaded = (
+        int(loader.df.select(pl.col("run").n_unique()).item()) if loader.df is not None and len(loader.df) else 0
+    )
+    total_events = len(loader.df) if loader.df is not None else 0
+    downsampling_applied = False
+    if args.runs and args.runs > 0 and runs_limit < total_runs_available:
+        downsampling_applied = True
+    if args.errors_per_run and args.errors_per_run > 0:
+        downsampling_applied = True
+
+    print("\n[Summary] Loader diagnostics:")
+    print(
+        f"  runs_available={total_runs_available} | runs_loaded={runs_loaded} | run_limit="
+        f"{'unlimited' if runs_limit >= UNLIMITED_SENTINEL else runs_limit}"
+    )
+    print(
+        f"  errors_per_run_limit={'unlimited' if errors_limit >= UNLIMITED_SENTINEL else errors_limit} "
+        f"| allow_duplicates={args.allow_duplicates}"
+    )
+    print(f"  total_events_loaded={total_events}")
+    print(f"[Summary] Downsampling occurred: {'yes' if downsampling_applied else 'no'}")
 
     if args.save_parquet:
         out_dir = Path(args.output_dir)
