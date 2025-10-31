@@ -279,6 +279,7 @@ def main() -> None:
     print("\nTraining Isolation Forest on event words (Phase D)")
     numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
     sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
+    # IsolationForest learns only from normal runs; keep anomalies in test_df for evaluation.
     correct_events = df_events.filter(pl.col("test_case") == "correct")
     holdout_fraction = min(max(args.if_holdout_fraction, 0.0), 0.5)
     holdout_df = None
