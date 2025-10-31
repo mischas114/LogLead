@@ -9,8 +9,7 @@ This single reference explains how to execute, persist, and iterate on the LO2 M
 
 ## Quick Start Commands
 ```bash
-# 1) Load and persist events/sequences
-python demo/run_lo2_loader.py \
+python demo/lo2_e2e/run_lo2_loader.py \
   --root /path/to/lo2_runs \
   --runs 5 \
   --errors-per-run 1 \
@@ -18,8 +17,10 @@ python demo/run_lo2_loader.py \
   --save-parquet \
   --output-dir demo/result/lo2
 
+python demo/lo2_e2e/run_lo2_loader.py --root --errors-per-run 1 /Users/MTETTEN/Documents/Bachelorarbeit/lo2/lo2-analysis/data/lo2-sample/logs --service-types code token refresh-token --save-parquet --output-dir demo/result/lo2
+
 # 2) Enhance + detection (phases A–E)
-MPLBACKEND=Agg python demo/LO2_samples.py \
+MPLBACKEND=Agg python demo/lo2_e2e/LO2_samples.py \
   --phase full \
   --sample-seed 42 \
   --if-contamination 0.1 \
@@ -28,8 +29,16 @@ MPLBACKEND=Agg python demo/LO2_samples.py \
   --save-enhancers \
   --enhancers-output-dir result/lo2/enhanced
 
+  MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --if-contamination 0.5 --if-n-estimators 400 --nn-top-k 50 --shap-sample 200
+
+```
+- --if-contamination 0.10: let Isolation Forest assume roughly 10 % of events may be anomalous.
+- --if-n-estimators 400: build the Isolation Forest with 400 trees for a steadier score distribution.
+- --nn-top-k 50: keep the 50 highest-scoring anomalies for nearest-normal comparisons in the explainability pass.
+- --shap-sample 200: limit SHAP calculations to 200 sampled events/sequences so plots stay fast.
+```
 # 3) Explainability pass (phase F)
-MPLBACKEND=Agg python demo/lo2_phase_f_explainability.py \
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --root demo/result/lo2 \
   --if-contamination 0.45 \
   --nn-top-k 50 \

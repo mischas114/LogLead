@@ -198,10 +198,10 @@ The LO2 MVP was implemented by **Mischa Tettenborn** (@mischas114), who created 
 - **Without this**: No way to load LO2 data into LogLead; the entire pipeline would be blocked at the data ingestion stage
 
 **2. Complete Demo Script Suite** (5 scripts, ~1,200 lines total)
-- `demo/run_lo2_loader.py`: CLI-based loader with extensive configuration options
-- `demo/LO2_samples.py`: End-to-end pipeline demonstration (load → enhance → detect → explain)
+- `demo/lo2_e2e/run_lo2_loader.py`: CLI-based loader with extensive configuration options
+- `demo/lo2_e2e/LO2_samples.py`: End-to-end pipeline demonstration (load → enhance → detect → explain)
 - `demo/lo2_if_baseline.py`: Isolation Forest baseline implementation with sequence-level analysis
-- `demo/lo2_phase_f_explainability.py`: Advanced explainability workflow with SHAP and nearest-neighbor analysis
+- `demo/lo2_e2e/lo2_phase_f_explainability.py`: Advanced explainability workflow with SHAP and nearest-neighbor analysis
 - `demo/lo2_feature_test.py`: Feature matrix validation and sanity checks
 - **Without these**: Users would have no clear starting point; research workflows would need to be built from scratch; critical features like result persistence, metrics tracking, and XAI integration would be missing
 
@@ -231,11 +231,11 @@ The LO2 MVP was implemented by **Mischa Tettenborn** (@mischas114), who created 
    - Without them: researchers would spend days figuring out correct API calls, parameter settings, and data transformations
 
 3. **Experimental Flexibility**: Limited ability to configure analyses
-   - CLI parameters in `run_lo2_loader.py` enable quick iteration (service filtering, error sampling, run limits)
+  - CLI parameters in `demo/lo2_e2e/run_lo2_loader.py` enable quick iteration (service filtering, error sampling, run limits)
    - Without them: code modifications required for each experiment variation
 
 4. **Explainability Integration**: No systematic approach to understanding model decisions
-   - `lo2_phase_f_explainability.py` implements the complete XAI workflow (IF → NN mapping → SHAP → false positive analysis)
+  - `demo/lo2_e2e/lo2_phase_f_explainability.py` implements the complete XAI workflow (IF → NN mapping → SHAP → false positive analysis)
    - Without it: explainability would be ad-hoc; no standard for comparing error patterns
 
 5. **Result Management**: No systematic experiment tracking
@@ -391,13 +391,13 @@ The `LO2Loader` produces dataframes with the following schemas:
 
 Several demo scripts demonstrate the `LO2Loader` in action:
 
-### 1. `demo/run_lo2_loader.py`
+### 1. `demo/lo2_e2e/run_lo2_loader.py`
 Basic loader demonstration with CLI arguments for configuration. Shows how to:
 - Load LO2 data with various parameters
 - Save to Parquet format
 - Inspect event and sequence dataframes
 
-### 2. `demo/LO2_samples.py`
+### 2. `demo/lo2_e2e/LO2_samples.py`
 Complete pipeline demonstration showing:
 - Loading LO2 data
 - Applying enhancers (normalization, tokenization, parsing)
@@ -449,7 +449,7 @@ Potential improvements noted in the code:
   - `loglead/loaders/hdfs.py` (sequence-based logging)
   - `loglead/loaders/nezha.py` (microservice architecture)
   - `loglead/loaders/bgl.py` (timestamp parsing)
-- **Demo Scripts**: `demo/run_lo2_loader.py`, `demo/LO2_samples.py`, `demo/lo2_phase_f_explainability.py`
+- **Demo Scripts**: `demo/lo2_e2e/run_lo2_loader.py`, `demo/lo2_e2e/LO2_samples.py`, `demo/lo2_e2e/lo2_phase_f_explainability.py`
 - **Architecture Documentation**: `docs/LO2_architektur_detail.md`, `docs/LO2_e2e_pipeline.md`
 
 ## Conclusion

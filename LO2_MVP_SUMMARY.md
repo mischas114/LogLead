@@ -60,10 +60,10 @@ The LO2 MVP was implemented by **Mischa Tettenborn**, who created the complete w
 - Integration with LogLead's ecosystem
 
 **2. Demo Script Suite** (~1,200 lines)
-- `run_lo2_loader.py`: CLI-based data loading with extensive configuration
-- `LO2_samples.py`: Complete end-to-end pipeline demonstration
+- `demo/lo2_e2e/run_lo2_loader.py`: CLI-based data loading with extensive configuration
+- `demo/lo2_e2e/LO2_samples.py`: Complete end-to-end pipeline demonstration
 - `lo2_if_baseline.py`: Isolation Forest baseline with sequence analysis
-- `lo2_phase_f_explainability.py`: Advanced explainability workflow (SHAP, NN analysis)
+- `demo/lo2_e2e/lo2_phase_f_explainability.py`: Advanced explainability workflow (SHAP, NN analysis)
 - `lo2_feature_test.py`: Feature validation and sanity checking
 
 **3. Documentation Framework** (~600 lines)
@@ -99,15 +99,15 @@ The LO2 MVP was implemented by **Mischa Tettenborn**, who created the complete w
 #### Functional Impact
 
 **Scenario 1: Basic Usage**
-- Demo: `run_lo2_loader.py --root /data --runs 100 --single-service client`
+- Demo: `python demo/lo2_e2e/run_lo2_loader.py --root /data --runs 100 --single-service client`
 - Impact: Researchers can load and explore data immediately, no custom code needed
 
 **Scenario 2: Anomaly Detection**
-- Demo: `LO2_samples.py --phase full`
+- Demo: `python demo/lo2_e2e/LO2_samples.py --phase full`
 - Impact: Complete workflow from raw logs to predictions with metrics
 
 **Scenario 3: Model Explainability**
-- Demo: `lo2_phase_f_explainability.py --if-contamination 0.1`
+- Demo: `python demo/lo2_e2e/lo2_phase_f_explainability.py --if-contamination 0.1`
 - Impact: Understand why specific runs are flagged as anomalous
 
 **Scenario 4: Experiment Tracking**
@@ -120,9 +120,9 @@ The difference between "a loader exists" and "a viable MVP" is exactly what Misc
 
 Three demo scripts demonstrate the LO2Loader:
 
-1. **`demo/run_lo2_loader.py`**: Basic loader with CLI configuration
-2. **`demo/LO2_samples.py`**: Complete pipeline (loading → enhancement → detection → explainability)
-3. **`demo/lo2_phase_f_explainability.py`**: Advanced explainability analysis
+1. **`demo/lo2_e2e/run_lo2_loader.py`**: Basic loader with CLI configuration
+2. **`demo/lo2_e2e/LO2_samples.py`**: Complete pipeline (loading → enhancement → detection → explainability)
+3. **`demo/lo2_e2e/lo2_phase_f_explainability.py`**: Advanced explainability analysis
 
 ## Documentation Provided
 
