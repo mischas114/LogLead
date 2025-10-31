@@ -10,8 +10,9 @@ This folder groups the runnable scripts for the LO2 pipeline, covering data load
    ```
 2. **Generate enhancements and anomaly predictions**
    ```bash
-   python demo/lo2_e2e/LO2_samples.py --phase full --save-enhancers
+   python demo/lo2_e2e/LO2_samples.py --phase full --save-enhancers --save-model models/lo2_if.joblib
    ```
+   The `--save-model` argument stores the IsolationForest + vectorizer bundle for reuse; add `--overwrite-model` when replacing an existing dump.
 3. **Create explainability artefacts**
    ```bash
    MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --shap-sample 200

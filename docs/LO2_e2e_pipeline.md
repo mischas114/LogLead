@@ -70,14 +70,7 @@ Refer back to the demo scripts when you need finer control (e.g., `--phase if` o
 ## Persistence & Reuse
 1. **Loader artefacts** – always run the loader with `--save-parquet` so `lo2_events.parquet` and `lo2_sequences.parquet` survive across sessions.  
 2. **Enhanced caches (optional)** – after `EventLogEnhancer`, keep `result/lo2/enhanced/*.parquet` if notebooks should start with engineered features.  
-3. **Models + vectorisers** – immediately after training call:
-   ```python
-   from pathlib import Path
-   import joblib
-
-   Path("models").mkdir(exist_ok=True)
-   joblib.dump((sad.model, sad.vec), "models/lo2_if.joblib")
-   ```
+3. **Models + vectorisers** – pass `--save-model models/lo2_if.joblib` (and optionally `--overwrite-model`) to `LO2_samples.py` so the IsolationForest + vectoriser bundle is persisted automatically.  
    Later reuse via `model, vec = joblib.load("models/lo2_if.joblib")`, `sad.prepare_train_test_data(vectorizer_class=vec)`, then `sad.predict()`.
 4. **Predictions & reports** – persist `pred_df.write_parquet(...)` and the explainability artefacts under `result/lo2/explainability/`.  
 5. **After restart** – load Parquets with `pl.read_parquet(...)`, reload the joblib bundle, and rerun detection against new runs without retraining.
@@ -102,7 +95,7 @@ Refer back to the demo scripts when you need finer control (e.g., `--phase if` o
 | `lo2_sequences.parquet` | LO2Loader | `demo/result/lo2` | Sequence aggregates per run/test/service |
 | `lo2_if_predictions.parquet` | AnomalyDetector | `demo/result/lo2` | IF scores, ranks, predictions |
 | `result/lo2/enhanced/*.parquet` | LO2_samples.py (`--save-enhancers`) | `result/lo2/enhanced` | Optional cache of engineered features |
-| `models/lo2_if.joblib` | Manual `joblib.dump` | `models/` | Isolation Forest + vectoriser bundle |
+| `models/lo2_if.joblib` | `LO2_samples.py --save-model` | `models/` | Isolation Forest + vectoriser bundle |
 | `result/lo2/explainability/*` | lo2_phase_f_explainability.py | `demo/result/lo2/explainability` | NN mapping, SHAP plots, metrics |
 
 ## Known Limitations & Next Steps

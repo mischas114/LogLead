@@ -120,7 +120,7 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
 - Scoreable Werte via `sad.model.score_samples(...)` (negiert für Ranking).
 
 **Persistenz:**
-- Modelle werden nicht automatisch gespeichert; `joblib.dump((sad.model, sad.vec), "models/lo2_if.joblib")` muss explizit aufgerufen werden.
+- Modelle werden über das CLI-Flag `--save-model <pfad>` persistiert; bei wiederholten Läufen optional `--overwrite-model` setzen.
 
 ### Explainability Layer
 **Module:** `loglead.explainer.NNExplainer`, `loglead.explainer.ShapExplainer`
@@ -139,7 +139,7 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
 - **Event-Parquet:** `demo/result/lo2/lo2_events.parquet`
 - **Sequenz-Parquet:** `demo/result/lo2/lo2_sequences.parquet`
 - **Predictions:** `demo/result/lo2/lo2_if_predictions.parquet` (bzw. `*_new.parquet` für Folgeruns)
-- **Modelle:** manuell via `models/lo2_if.joblib`
+- **Modelle:** `LO2_samples.py --save-model` → `models/lo2_if.joblib`
 - **Explainability:** `demo/result/lo2/explainability/` (CSV, TXT, PNG, JSON)
 
 ---
@@ -213,7 +213,7 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
 ---
 ## Betrieb & Wiederverwendung
 
-1. **Persistenz aktivieren:** `run_lo2_loader.py` mit `--save-parquet`, Modelle mittels `joblib.dump` sichern.
+   1. **Persistenz aktivieren:** `run_lo2_loader.py` mit `--save-parquet`, Modelle via `LO2_samples.py --save-model <pfad>` sichern.
 2. **Restart-Fall:** Parquets mit `pl.read_parquet(...)` laden, `joblib.load(...)` für Model + Vectorizer, `AnomalyDetector` initialisieren, `prepare_train_test_data(vectorizer_class=vec)` aufrufen, `sad.model = model`, `sad.predict()`.
 3. **Artefakte katalogisieren:**
    - `demo/result/lo2/` enthält alle Parquets.

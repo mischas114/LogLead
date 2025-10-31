@@ -10,6 +10,7 @@ import polars as pl
 from loglead import AnomalyDetector
 from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
 import loglead.explainer as ex
+import joblib
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +77,17 @@ def parse_args() -> argparse.Namespace:
         "--overwrite-enhancers",
         action="store_true",
         help="Allow replacing existing enhancer export files.",
+    )
+    parser.add_argument(
+        "--save-model",
+        type=Path,
+        default=None,
+        help="Optional path for persisting the trained IsolationForest model and vectorizer via joblib.",
+    )
+    parser.add_argument(
+        "--overwrite-model",
+        action="store_true",
+        help="Allow replacing an existing model dump when --save-model is provided.",
     )
     return parser.parse_args()
 
@@ -223,6 +235,18 @@ def main() -> None:
     else:
         pred_if.write_parquet(save_if_path)
     print(f"IsolationForest-Ergebnis gespeichert unter {save_if_path}")
+
+    if args.save_model:
+        model_path = args.save_model
+        if not model_path.is_absolute():
+            model_path = (orig_cwd / model_path).resolve()
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        if model_path.exists() and not args.overwrite_model:
+            raise SystemExit(
+                f"Modelldatei existiert bereits unter {model_path}. Verwende --overwrite-model, um sie zu ersetzen."
+            )
+        joblib.dump((sad_if.model, sad_if.vec), model_path)
+        print(f"IsolationForest-Modell + Vectorizer gespeichert unter {model_path}")
 
     if args.phase == "if":
         print("\nIsolation Forest abgeschlossen. Weitere Modelle übersprungen.")

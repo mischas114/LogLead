@@ -444,11 +444,13 @@ print(f"Vocabulary size: {len(sad.vec.vocabulary_)}")  # 5000
    - Jeder Tree: Zufällige Feature-Splits bis Samples isoliert sind
    - Anomalien = Punkte mit kürzeren Pfaden (leichter zu isolieren)
 
-3. **Persistenz (manuell):**
-   ```python
-   import joblib
-   joblib.dump((model, sad.vec), "models/lo2_if.joblib")
-   ```
+3. **Persistenz:**  
+   - Empfohlen: `LO2_samples.py --save-model models/lo2_if.joblib` (optional `--overwrite-model`).  
+   - Alternativ rein programmgesteuert:
+     ```python
+     import joblib
+     joblib.dump((model, sad.vec), "models/lo2_if.joblib")
+     ```
 
 **Ausgangsformat:**
 - Trained `IsolationForest` Objekt (in memory)
@@ -469,7 +471,10 @@ sad.train_IsolationForest(
     random_state=42
 )
 
-# Persist:
+# Persist per Skriptflag:
+# python demo/lo2_e2e/LO2_samples.py --save-model models/lo2_if.joblib
+
+# Alternativ direkt im Code:
 import joblib
 from pathlib import Path
 Path("models").mkdir(exist_ok=True)
