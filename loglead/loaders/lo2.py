@@ -28,6 +28,8 @@ class LO2Loader(BaseLoader):
         single_error_type=None,
         single_service="",
         service_types=None,
+        trim_init_lines=True,
+        init_lines_to_skip=100,
     ):
         """
         :param filename: Path to the data directory (this is the root where the runs are).
@@ -37,6 +39,8 @@ class LO2Loader(BaseLoader):
         :param single_error_type: A specific error type to use exclusively across all runs, or "random" to select one randomly.
         :param single_service: A specific service instead of all to use in the analysis. Options: client, code, key, refresh-token, service, token, user
         :param service_types: Optional list of services to include. Overrides single_service when provided.
+        :param trim_init_lines: If True, skip the first init_lines_to_skip lines to remove initialization sequences that leak label information.
+        :param init_lines_to_skip: Number of initial lines to skip (default: 100, as per LO2 documentation).
         """
         self.filename = filename
         self.n_runs = n_runs
@@ -82,6 +86,10 @@ class LO2Loader(BaseLoader):
         self.selected_random_error = None  # Store the randomly chosen error if single_error_type == "random"
         self.metrics_df = None
         self.used_errors = set()  # Track used error cases when dup_errors is False
+
+        # Log trimming parameters (prevents label leakage from initialization sequences)
+        self.trim_init_lines = trim_init_lines
+        self.init_lines_to_skip = init_lines_to_skip
 
         super().__init__(filename, df, df_seq)
 
@@ -195,6 +203,11 @@ class LO2Loader(BaseLoader):
     def _process_log_file(self, log_file_path, run, test_case, log_file):
         with open(log_file_path, 'r', encoding="utf-8") as f:
             log_lines = f.readlines()
+        
+        # Apply trimming logic to prevent label leakage
+        # Skip initialization lines (applies to all logs)
+        if self.trim_init_lines and len(log_lines) > self.init_lines_to_skip:
+            log_lines = log_lines[self.init_lines_to_skip:]
         
         log_lines_cleaned = [str(line).strip() for line in log_lines if line.strip()]
         

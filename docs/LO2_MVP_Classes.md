@@ -40,14 +40,17 @@ LO2Loader(
     errors_per_run=1,  # Number of errors per run
     dup_errors=True,   # Allow duplicate errors across runs
     single_error_type=None,  # Focus on specific error type
-    single_service=""  # Filter by specific service
+    single_service="", # Filter by one service (deprecated by service_types)
+    service_types=None, # List of services (overrides single_service)
+    trim_init_lines=True,   # Drop initialization sequences
+    init_lines_to_skip=100  # Number of lines to skip when trimming
 )
 ```
 
 ##### 2. **Log File Loading** (`load()` method)
 - Traverses the LO2 directory structure
 - Processes log files from multiple runs and test cases
-- Filters logs by service type if specified
+- Filters logs by service type if specified (supports single_service or service_types)
 - Supports both "correct" (normal) and error test cases
 - Creates event-level dataframe with columns:
   - `m_message`: The actual log message
@@ -66,6 +69,7 @@ LO2Loader(
 
 ##### 4. **Log File Processing** (`_process_log_file()` method)
 - Reads individual log files
+- Entfernt optional die ersten `init_lines_to_skip` Zeilen (Standard: 100), um Initialisierungssequenzen auszublenden
 - Cleans and strips log lines
 - Adds metadata (run, test_case, service)
 - Creates sequence IDs for grouping related events
