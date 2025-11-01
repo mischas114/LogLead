@@ -25,6 +25,11 @@
 - Für schnellere Iterationen vor großen Datenläufen `LO2_samples.py --phase enhancers` (Feature-Check) ausführen und erst bei Bedarf mit `--phase if` bzw. `--phase full` in die Modellierung starten.
 - Headless-Modus (`MPLBACKEND=Agg`) verwenden, um lange SHAP-Runs ohne manuelles Eingreifen durchlaufen zu lassen und Logs in `summary-result.md` zu referenzieren.
 
+## Dokumentations-Changelog (Wartung)
+- **2025-02:** `LO2_samples.py` erhielt eine Modell-Registry (`--models`/`--list-models`); entsprechende Abschnitte in `docs/LO2_e2e_pipeline.md`, `docs/DATENVERARBEITUNG_INTEGRATION.md` und `docs/LO2_IF_E2E.md` wurden aktualisiert.
+- **2025-02:** Neue TODO-Tabelle für offene Dokumentationsaufgaben in `docs/DATENVERARBEITUNG_INTEGRATION.md`.
+- **2025-02:** Architektur-Visuals als Mermaid-Diagramme ersetzt (`docs/architektur-v1.md`, `docs/LO2_architektur_detail.md`).
+
 ### False-Positive-Zahlen richtig einordnen
 - Phase-F arbeitet auf Ereignis-Ebene (`lo2_events.parquet`). Jede Logzeile wird einzeln bewertet.
 - `--if-contamination=0.45` erlaubt dem IsolationForest, bis zu 45 % aller Events als anomal zu markieren. Bei ~386 k Events entstehen so schnell >150 k Einträge in `if_false_positives.txt`, auch wenn Runs insgesamt korrekt sind. Mit `--if-contamination=0.1` sank die FP-Liste zuletzt auf ~44 k Events, blieb aber deutlich über Null, weil weiterhin einzelne Logzeilen in gesunden Runs auffallen.

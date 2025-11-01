@@ -43,7 +43,82 @@ Scope: Fokus liegt auf der vollständigen Event-Pipeline (Rohlog → Feature →
 
 ---
 ## Pipeline-Übersicht
-![alt text](image-1.png)
+
+```mermaid
+flowchart TD
+    subgraph Input["Phase A – Logquellen"]
+        rawLogs["ROH-LOGS<br/>run_*/test_case/*.log"]
+        rawMetrics["OPTIONAL<br/>metrics/*.json"]
+    end
+
+    subgraph Loader["Phase B – Loader"]
+        loader["LO2Loader\n(loglead.loaders.lo2)"]
+        eventsParquet["lo2_events.parquet"]
+        seqParquet["lo2_sequences.parquet"]
+        metricsDf["metrics_df"]
+    end
+
+    subgraph Enhancers["Phase C – Feature Engineering"]
+        eventEnh["EventLogEnhancer\nnormalize → words → trigrams → drain → length"]
+        seqEnh["SequenceEnhancer\nseq_len → duration → tokens"]
+        eventFeatures["Enhanced Events\n(e_words, e_trigrams, e_chars_len, …)"]
+        seqFeatures["Enhanced Sequences\n(seq_len, duration_sec, tokens_*)"]
+    end
+
+    subgraph Models["Phase D/E – Modell-Registry (--models)"]
+        ifModel["IsolationForest\n(filter_anos=True)"]
+        lrWords["LogReg (event_lr_words)"]
+        dtTrigrams["DecisionTree (event_dt_trigrams)"]
+        lofWords["LocalOutlierFactor (event_lof_words)"]
+        oovDetector["OOVDetector (event_oov_words)"]
+        seqLR["Sequence LR (sequence_shap_lr_words / numeric)"]
+        registry["Registry Orchestrator\nLO2_samples.py"]
+    end
+
+    subgraph Persist["Phase D/E – Persistenz & Reporting"]
+        predsDf["lo2_if_predictions.parquet"]
+        metricsOut["metrics/if_metrics.{json,csv}"]
+        modelDump["models/lo2_if.joblib"]
+        metaYaml["models/model.yml"]
+    end
+
+    subgraph Explain["Phase F – Explainability"]
+        nnExplainer["NNExplainer\nif_nn_mapping.csv"]
+        shapExplainer["ShapExplainer\nsummary/feature plots"]
+        fpList["if_false_positives.txt"]
+        expOut["demo/result/lo2/explainability/*"]
+    end
+
+    rawLogs --> loader
+    rawMetrics -.-> loader
+    loader --> eventsParquet
+    loader --> seqParquet
+    loader -.-> metricsDf
+
+    eventsParquet --> eventEnh --> eventFeatures
+    seqParquet --> seqEnh --> seqFeatures
+
+    eventFeatures --> registry
+    seqFeatures -.-> registry
+    registry --> ifModel
+    registry --> lrWords
+    registry --> dtTrigrams
+    registry --> lofWords
+    registry --> oovDetector
+    registry --> seqLR
+
+    ifModel --> predsDf
+    ifModel --> modelDump
+    ifModel --> metaYaml
+    registry -.-> metricsOut
+    registry -.-> predsDf
+
+    predsDf --> nnExplainer
+    predsDf --> shapExplainer
+    nnExplainer --> expOut
+    shapExplainer --> expOut
+    shapExplainer --> fpList
+```
 ---
 ## Komponentenbeschreibung
 

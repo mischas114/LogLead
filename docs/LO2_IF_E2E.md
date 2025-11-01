@@ -13,9 +13,13 @@ Dieses Dokument fasst den End-to-End-Ablauf der LO2 Anomalieerkennung zusammen u
 3. **Labels:** Der Loader setzt `test_case` (`"correct"`/Fehlername) und `anomaly` (0/1); Fixup: Trainingsdaten enthalten ausschließlich `test_case == "correct"`.
 4. **Hauptskript:**  
    ```bash
-   python demo/lo2_e2e/LO2_samples.py --phase if --save-model models/lo2_if.joblib
+   python demo/lo2_e2e/LO2_samples.py \
+     --phase if \
+     --save-model models/lo2_if.joblib \
+     --if-holdout-fraction 0.1 \
+     --if-threshold-percentile 99.5
    ```  
-   Optional `--if-holdout-fraction`, `--if-threshold-percentile`, `--report-*` für Benchmarks.
+   Mit `--models` lässt sich bestimmen, welche zusätzlichen Detektoren neben dem IsolationForest laufen (Standard: `event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`). `--list-models` zeigt die verfügbaren Schlüssel.
 
 ## Kurzüberblick (Text-Flow)
 
@@ -40,7 +44,7 @@ Loader → Parquet (`lo2_events.parquet`)
 ## 3. Trainings-/Testsplit für IF
 
 - Nur Zeilen mit `test_case == "correct"` dienen als Trainingsbasis (`demo/lo2_e2e/LO2_samples.py:280`).
-- Optional kann ein zeitlicher Hold-out reserviert werden (`--if-holdout-fraction`, `demo/lo2_e2e/LO2_samples.py:281-296`). Dieser Anteil fließt **nicht** ins Training, sondern in die Schwellenkalibrierung.
+- Optional kann ein zeitlicher Hold-out reserviert werden (`--if-holdout-fraction`, `demo/lo2_e2e/LO2_samples.py:281-296`). Dieser Anteil fließt **nicht** ins Training, sondern ausschließlich in die Schwellen- bzw. Driftkalibrierung (`--if-threshold-percentile`, PSI-Berechnung).
 - `AnomalyDetector.prepare_train_test_data()` (`loglead/anomaly_detection.py`) vektorisiert das Trainingsset; neue Tokens erweitern dabei automatisch das Vokabular.
 
 ## 4. Isolation Forest Training & Score Berechnung
@@ -51,8 +55,8 @@ Loader → Parquet (`lo2_events.parquet`)
 
 ## 5. Schwellenkalibrierung (optional)
 
-- Flag `--if-threshold-percentile` nutzt Hold-out- oder Trainingsscores, um eine Perzentilschwelle abzuleiten (`demo/lo2_e2e/LO2_samples.py:333-346`).
-- Die Schwelle wird als zusätzliche Spalte `pred_if_threshold` im Ergebnis-Datenframe abgelegt, sobald sie gesetzt ist (`demo/lo2_e2e/LO2_samples.py:350-353`).
+- Flag `--if-threshold-percentile` nutzt Hold-out- (falls vorhanden) oder Trainingsscores, um eine Perzentilschwelle abzuleiten (`demo/lo2_e2e/LO2_samples.py:333-346`).
+- Die Schwelle wird als zusätzliche Spalte `pred_if_threshold` im Ergebnis-Datenframe abgelegt, sobald sie gesetzt ist (`demo/lo2_e2e/LO2_samples.py:350-353`). Wertebereich: `>1` interpretiert als Prozentangabe, `0-1` als Anteil.
 
 ## 6. Persistenz & Metriken
 
@@ -61,13 +65,19 @@ Loader → Parquet (`lo2_events.parquet`)
 - Optional: `--dump-metadata` erzeugt `models/model.yml` mit Parameter- und Dataset-Infos (`demo/lo2_e2e/LO2_samples.py:426-458`).
 - Metriken: `--report-precision-at`, `--report-fp-alpha`, `--report-psi` schreiben JSON/CSV nach `result/lo2/metrics/` (`demo/lo2_e2e/LO2_samples.py:365-402`).
 
-## 7. Benchmarking & Bewertung
+## 7. Modell-Registry & Varianten (Phase E/F)
+
+- `--list-models` listet alle verfügbaren Event- und Sequence-Detektoren (z. B. LogisticRegression, DecisionTree, LocalOutlierFactor, OOVDetector, Sequence-LR mit SHAP).
+- `--models key1,key2,...` aktiviert eine Teilmenge; ohne Angabe läuft das Default-Set. Sequence-Modelle werden automatisch übersprungen, wenn **kein** `lo2_sequences.parquet` vorliegt.
+- Modelle mit `train_selector=correct_only` (LOF, OOV) trainieren ausschließlich auf `test_case == "correct"`; die Evaluation findet trotzdem auf allen Events/Sequenzen statt.
+
+## 8. Benchmarking & Bewertung
 
 - **Precision@k**: Anteil tatsächlich anomaler Zeilen in den Top-k Scores (`demo/lo2_e2e/metrics_utils.py:19-36`).
 - **FP-rate@α**: False-Positive-Rate innerhalb der Top-α-Scores (`demo/lo2_e2e/metrics_utils.py:39-60`).
 - **PSI**: Vergleich der Scoreverteilungen (Train vs. Hold-out) für Drifterkennung (`demo/lo2_e2e/metrics_utils.py:63-92`).
 
-## 8. Inferenz & Folgeprozesse
+## 9. Inferenz & Folgeprozesse
 
 - Für neue Logdaten: Loader erneut ausführen, Modell mit aktueller Schwelle anwenden (`joblib.load` + gespeicherte Threshold aus `model.yml`), dann `sad_if.predict()` auf dem neuen Dataset aufrufen.
 - Überwachung: `if_metrics.json` vergleichen (Precision↑, FP↓, PSI≤0.2) und bei Drift neu trainieren.

@@ -36,10 +36,10 @@
 Damit ist der komplette Weg von LO2-Rohlogs bis Explainability reproduzierbar dokumentiert und automatisiert.
 
 ## Dokumentations-Backlog (ToDos)
-- `docs/DATENVERARBEITUNG_INTEGRATION.md` nachziehen: Abschnitt zu konfigurierbaren Modellen ergänzen, Diagramm mit Phase-E-Varianten erweitern, offene Fragen aktualisieren.
-- `docs/LO2_e2e_pipeline.md` aktualisieren: `--models` Flag samt Beispiel aufnehmen, Default-Modelle tabellarisch erklären, Quickstart-Befehle vereinheitlichen.
-- `docs/LO2_IF_E2E.md` prüfen: Threshold-/Holdout-Beschreibung gegen aktuelle CLI-Parameter abgleichen (z. B. `--if-threshold-percentile`).
-- Bilder (`architektur-v1.png`, `image-1.png`) mit neuem Explainability-Flow (NN mapping + SHAP) refreshen.
-- `docs/NEXT_STEPS.md` um wartbare Dokumentations-Changelog-Sektion ergänzen, damit zukünftige Anpassungen nachvollziehbar bleiben.
+- [x] `docs/DATENVERARBEITUNG_INTEGRATION.md` nachziehen: Abschnitt zu konfigurierbaren Modellen ergänzen, Diagramm mit Phase-E-Varianten erweitern, offene Fragen aktualisieren.
+- [x] `docs/LO2_e2e_pipeline.md` aktualisieren: `--models` Flag samt Beispiel aufnehmen, Default-Modelle tabellarisch erklären, Quickstart-Befehle vereinheitlichen.
+- [x] `docs/LO2_IF_E2E.md` prüfen: Threshold-/Holdout-Beschreibung gegen aktuelle CLI-Parameter abgleichen (z. B. `--if-threshold-percentile`).
+- [x] Architektur-Visuals durch Mermaid-Diagramme ersetzen (`docs/architektur-v1.md`, `docs/LO2_architektur_detail.md`).
+- [x] `docs/NEXT_STEPS.md` um wartbare Dokumentations-Changelog-Sektion ergänzen, damit zukünftige Anpassungen nachvollziehbar bleiben.
 
 ----

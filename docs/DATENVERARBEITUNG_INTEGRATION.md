@@ -67,28 +67,38 @@ graph TB
     end
     
     subgraph "6. Feature Engineering"
-        N --> R[CountVectorizer]
+        N --> R[Vectorizer BOW/Drain]
         N --> S[Numeric Features]
+        Q --> S
         R --> T[Sparse Matrix X]
         S --> T
         T --> U[Train/Test Split]
     end
     
-    subgraph "7. Model Training IF"
-        U --> V[IsolationForest.fit]
-        V --> W[Trained Model]
-        W --> X[joblib: lo2_if.joblib]
+    subgraph "7. Model Selection (Phase E)"
+        U --> V1[IsolationForest]
+        U --> V2[LogReg Words]
+        U --> V3[DecisionTree Trigrams]
+        U --> V4[LocalOutlierFactor]
+        U --> V5[OOVDetector]
+        U --> V6[Sequence LR (numeric)]
+        V2 --> W
+        V3 --> W
+        V4 --> W
+        V5 --> W
+        V6 --> W
+        V1 --> W[Registry orchestrator<br/>(--models)]
     end
     
-    subgraph "8. Inference"
+    subgraph "8. Persist/Score"
+        W --> X[joblib: lo2_if.joblib]
         W --> AE[predict]
-        W --> AF[score_samples]
+        W --> AF[score_samples / probabilities]
         AE --> AG[Binary: pred_ano]
-        AF --> AH[Scores: score_if]
-        AH --> AI[Ranking: rank_if]
+        AF --> AH[Scores & ranks]
         AG --> AJ[Predictions DF]
-        AI --> AJ
-        AJ --> AK[Parquet: lo2_if_predictions.parquet]
+        AH --> AJ
+        AJ --> AK[Parquet/CSV outputs]
     end
     
     subgraph "9. Explainability"
@@ -1662,7 +1672,7 @@ Diese Dokumentation bietet eine vollständige, umsetzbare Erklärung der LO2-Dat
 
 | Thema | Datei | Aufgabe | Owner | Status |
 |-------|-------|---------|-------|--------|
-| Modell-Registry visualisieren | `architektur-v1.png` / `LO2_architektur_detail.md` | Diagramm um Phase-E-Varianten (LR, DT, LOF, OOV) ergänzen | Data Platform | offen |
+| Modell-Registry visualisieren | `docs/architektur-v1.md` / `docs/LO2_architektur_detail.md` | Mermaid-Diagramm inkl. Phase-E-Varianten & Explainability | Data Platform | erledigt (2025-02) |
 | CLI-Flag-Referenz vereinheitlichen | `LO2_e2e_pipeline.md` | Quickstart und Flag-Beschreibungen auf neue `--models`/`--list-models` Syntax trimmen | Docs-Team | geplant |
 | Persistenz-Policy nachziehen | `LO2_IF_E2E.md` | `--dump-metadata` & `models/model.yml` genauer erläutern | MLOps | offen |
 | Explainability Beispiele erweitern | `LO2_enhanced_exports.md` | Beispiel-Shapplots & NN-Mapping-CSV verlinken | ML-Team | offen |
