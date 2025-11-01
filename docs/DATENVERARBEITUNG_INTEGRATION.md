@@ -955,6 +955,30 @@ python demo/lo2_phase_f_explainability.py \
   --shap-sample 200
 ```
 
+#### Modellvarianten & Registry (`--models`)
+
+Seit `LO2_samples.py` Version 2025-02 werden zusätzliche Anomalie-Detektoren modular über eine Registry aktiviert:
+
+- `--list-models` zeigt alle verfügbaren Schlüssel (Events & Sequenzen) mit Kurzbeschreibung.
+- `--models key1,key2,...` definiert eine gewünschte Kombination; Standard ist `event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`.
+- Sequence-Modelle werden automatisch übersprungen, wenn kein `lo2_sequences.parquet` vorliegt; Modelle mit `train_selector=correct_only` trainieren explizit nur auf `test_case == "correct"`.
+
+**Aktuelle Kernauswahl**
+
+| Schlüssel | Ebene | Beschreibung | Besonderheiten |
+|-----------|-------|--------------|----------------|
+| `event_lr_words` | Events | LogisticRegression auf Worttokens | Referenz-Baseline |
+| `event_dt_trigrams` | Events | DecisionTree auf Trigramm-Features | Gut für Regel-Indikatoren |
+| `event_lof_words` | Events | LocalOutlierFactor (novelty) | Trainiert ausschließlich auf `correct` Runs |
+| `event_oov_words` | Events | OOVDetector für seltene Tokens | Nutzt Token-Längen-Spalten |
+| `sequence_lr_numeric` | Sequenzen | LogisticRegression auf `seq_len`, `duration_sec` | Benötigt Sequenz-Parquet |
+| `sequence_shap_lr_words` | Sequenzen | LogisticRegression + SHAP-Ausgabe | Liefert Explainability-Artefakte |
+
+**Warum relevant für Integration?**
+- Neue Datenquellen können zuerst über Light-Touch-Modelle (`event_lr_words`) validiert werden, bevor auf IF gewechselt wird.
+- Teams können Pipeline-Runs mit identischen Loader-/Enhancer-Schritten, aber unterschiedlichen Modellen vergleichen, ohne Skripte zu forken.
+- Persistierte Artefakte (Parquet, SHAP-Plots) folgen weiterhin der in Abschnitt 6 beschriebenen Struktur.
+
 ---
 
 ### 5.3 Hyperparameter & Artefakte
@@ -1633,6 +1657,16 @@ Diese Dokumentation bietet eine vollständige, umsetzbare Erklärung der LO2-Dat
 - End-to-End Fehler nachvollziehen via Logs und Trace-IDs
 - Trainings- und Persistenzprozesse reproduzieren
 - Die Pipeline sicher erweitern und anpassen
+
+## 11. Dokumentations-ToDos
+
+| Thema | Datei | Aufgabe | Owner | Status |
+|-------|-------|---------|-------|--------|
+| Modell-Registry visualisieren | `architektur-v1.png` / `LO2_architektur_detail.md` | Diagramm um Phase-E-Varianten (LR, DT, LOF, OOV) ergänzen | Data Platform | offen |
+| CLI-Flag-Referenz vereinheitlichen | `LO2_e2e_pipeline.md` | Quickstart und Flag-Beschreibungen auf neue `--models`/`--list-models` Syntax trimmen | Docs-Team | geplant |
+| Persistenz-Policy nachziehen | `LO2_IF_E2E.md` | `--dump-metadata` & `models/model.yml` genauer erläutern | MLOps | offen |
+| Explainability Beispiele erweitern | `LO2_enhanced_exports.md` | Beispiel-Shapplots & NN-Mapping-CSV verlinken | ML-Team | offen |
+| Übersetzungen prüfen | Alle deutschsprachigen Docs | Einheitliche Terminologie (Anomalie vs. Outlier, Normal vs. Correct) festlegen | Tech Writing | geplant |
 
 ---
 

@@ -9,41 +9,37 @@ This single reference explains how to execute, persist, and iterate on the LO2 M
 
 ## Quick Start Commands
 ```bash
+# 1) Loader (Phase B)
 python demo/lo2_e2e/run_lo2_loader.py \
   --root /path/to/lo2_runs \
   --runs 5 \
   --errors-per-run 1 \
-  --single-service client \
+  --service-types code token refresh-token \
   --save-parquet \
   --output-dir demo/result/lo2
 
-python demo/lo2_e2e/run_lo2_loader.py --root --errors-per-run 1 /Users/MTETTEN/Documents/Bachelorarbeit/lo2/lo2-analysis/data/lo2-sample/logs --service-types code token refresh-token --save-parquet --output-dir demo/result/lo2
-
-# 2) Enhance + detection (phases A–E)
-MPLBACKEND=Agg python demo/lo2_e2e/LO2_samples.py \
+# 2) Enhancement + Detection (Phasen C–E)
+python demo/lo2_e2e/LO2_samples.py \
   --phase full \
   --sample-seed 42 \
-  --if-contamination 0.1 \
+  --if-contamination 0.12 \
   --if-item e_words \
   --if-numeric e_chars_len \
   --save-enhancers \
-  --enhancers-output-dir result/lo2/enhanced
+  --save-model models/lo2_if.joblib \
+  --models event_lr_words,event_rf_words,event_lof_words,sequence_shap_lr_words
 
-  MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --if-contamination 0.5 --if-n-estimators 400 --nn-top-k 50 --shap-sample 200
-
-```
-- --if-contamination 0.10: let Isolation Forest assume roughly 10 % of events may be anomalous.
-- --if-n-estimators 400: build the Isolation Forest with 400 trees for a steadier score distribution.
-- --nn-top-k 50: keep the 50 highest-scoring anomalies for nearest-normal comparisons in the explainability pass.
-- --shap-sample 200: limit SHAP calculations to 200 sampled events/sequences so plots stay fast.
-```
-# 3) Explainability pass (phase F)
+# 3) Explainability (Phase F)
 MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --root demo/result/lo2 \
   --if-contamination 0.45 \
+  --if-n-estimators 400 \
   --nn-top-k 50 \
-  --shap-sample 200
+  --shap-sample 200 \
+  --nn-normal-sample 100
 ```
+
+> Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` zeigt alle verfügbaren Modell-Schlüssel; ohne `--models` nutzt die Pipeline das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`).
 
 ### Expected Outputs (`demo/result/lo2/`)
 - `lo2_events.parquet` / `lo2_sequences.parquet`: loader exports with labels, timestamps, `seq_id`.  
@@ -62,9 +58,23 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 
 Refer back to the demo scripts when you need finer control (e.g., `--phase if` only, or different feature columns). They mirror the methods in `loglead.loaders`, `loglead.enhancers`, and `loglead.AnomalyDetector`.
 
+### Modell-Registry Überblick
+
+| Schlüssel | Ebene | Beschreibung | Standardmäßig aktiv |
+|-----------|-------|--------------|---------------------|
+| `event_lr_words` | Event | LogisticRegression auf Worttokens (BOW) | ✅ |
+| `event_dt_trigrams` | Event | DecisionTree auf Trigram-Features | ✅ |
+| `event_rf_words` | Event | RandomForest (Bag-of-Words) | ⛔ (opt-in) |
+| `event_lof_words` | Event | LocalOutlierFactor, trainiert nur `correct` Runs | ⛔ (opt-in) |
+| `event_oov_words` | Event | OOVDetector für seltene Tokens | ⛔ (opt-in) |
+| `sequence_lr_numeric` | Sequence | LogisticRegression auf Dauer/Längen-Features | ✅ |
+| `sequence_shap_lr_words` | Sequence | LogisticRegression auf Worttokens + SHAP-Reports | ✅ |
+
+Sequence-Modelle werden automatisch übersprungen, wenn `lo2_sequences.parquet` fehlt. Nutze `--models` um Runs mit identischem Loader/Enhancer-Setup, aber variierenden Modellen zu vergleichen.
+
 ## CLI Flag Reference
 - **Loader:** `--root`, `--runs`, `--errors-per-run`, `--single-service`, `--save-parquet`, `--allow-duplicates`, `--load-metrics`, `--output-dir`.  
-- **Detector:** `--phase {enhancers,if,full}`, `--if-contamination`, `--if-n-estimators`, `--if-item`, `--if-numeric`, `--if-max-samples`, `--save-if`, `--save-enhancers`, `--save-model`, `--if-holdout-fraction`, `--if-threshold-percentile`, `--report-precision-at`, `--report-fp-alpha`, `--report-psi`, `--metrics-dir`, `--dump-metadata`.  
+- **Detector:** `--phase {enhancers,if,full}`, `--if-contamination`, `--if-n-estimators`, `--if-item`, `--if-numeric`, `--if-max-samples`, `--save-if`, `--save-enhancers`, `--save-model`, `--if-holdout-fraction`, `--if-threshold-percentile`, `--report-precision-at`, `--report-fp-alpha`, `--report-psi`, `--metrics-dir`, `--dump-metadata`, `--models`, `--list-models`.  
 - **Explainability:** `--if-contamination`, `--if-n-estimators`, `--nn-top-k`, `--nn-normal-sample`, `--shap-sample`, `--root`.
 
 ## Persistence & Reuse

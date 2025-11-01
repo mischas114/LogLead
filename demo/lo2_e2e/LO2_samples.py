@@ -10,6 +10,7 @@ import random
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from typing import Any, Dict, List
 
 import polars as pl
 
@@ -24,6 +25,128 @@ from metrics_utils import (
     population_stability_index,
     precision_at_k,
 )
+
+DEFAULT_SUPERVISED_MODELS: List[str] = [
+    "event_lr_words",
+    "event_dt_trigrams",
+    "sequence_lr_numeric",
+    "sequence_shap_lr_words",
+]
+
+MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "event_lr_words": {
+        "description": "LogisticRegression auf Event-Worttokens (Bag-of-Words).",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_LR",
+        "stat_label": "event_lr_words",
+    },
+    "event_dt_trigrams": {
+        "description": "DecisionTree auf Event-Trigrams.",
+        "level": "event",
+        "item_list_col": "e_trigrams",
+        "numeric_cols": [],
+        "train_method": "train_DT",
+        "stat_label": "event_dt_trigrams",
+    },
+    "event_lsvm_words": {
+        "description": "LinearSVM auf Event-Worttokens.",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_LSVM",
+        "stat_label": "event_lsvm_words",
+    },
+    "event_rf_words": {
+        "description": "RandomForest auf Event-Worttokens.",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_RF",
+        "stat_label": "event_rf_words",
+    },
+    "event_xgb_words": {
+        "description": "XGBoost Klassifikator auf Event-Worttokens.",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_XGB",
+        "stat_label": "event_xgb_words",
+    },
+    "event_lof_words": {
+        "description": "LocalOutlierFactor (novelty) auf Event-Worttokens (trainiert nur auf korrekten Runs).",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_LOF",
+        "train_kwargs": {"filter_anos": True},
+        "train_selector": "correct_only",
+        "stat_label": "event_lof_words",
+    },
+    "event_kmeans_words": {
+        "description": "KMeans Clustering auf Event-Worttokens (2 Cluster).",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_KMeans",
+        "stat_label": "event_kmeans_words",
+    },
+    "event_oneclass_svm_words": {
+        "description": "OneClassSVM auf Event-Worttokens (trainiert nur auf korrekten Runs).",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_OneClassSVM",
+        "train_selector": "correct_only",
+        "stat_label": "event_oneclass_svm_words",
+    },
+    "event_rarity_words": {
+        "description": "RarityModel auf Event-Worttokens.",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_RarityModel",
+        "stat_label": "event_rarity_words",
+    },
+    "event_oov_words": {
+        "description": "OOVDetector für seltene Tokens (trainiert nur auf korrekten Runs).",
+        "level": "event",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_OOVDetector",
+        "train_kwargs": {"filter_anos": True},
+        "train_selector": "correct_only",
+        "stat_label": "event_oov_words",
+    },
+    "sequence_lr_numeric": {
+        "description": "LogisticRegression auf Sequenz-Längen und Dauerfeatures.",
+        "level": "sequence",
+        "item_list_col": None,
+        "numeric_cols": ["seq_len", "duration_sec"],
+        "train_method": "train_LR",
+        "stat_label": "sequence_lr_numeric",
+    },
+    "sequence_lr_words": {
+        "description": "LogisticRegression auf Sequenz-Worttokens.",
+        "level": "sequence",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_LR",
+        "stat_label": "sequence_lr_words",
+    },
+    "sequence_shap_lr_words": {
+        "description": "LogisticRegression auf Sequenz-Worttokens mit SHAP-Erklärung.",
+        "level": "sequence",
+        "item_list_col": "e_words",
+        "numeric_cols": [],
+        "train_method": "train_LR",
+        "stat_label": "sequence_shap_lr_words",
+        "requires_shap": True,
+        "shap_kwargs": {"ignore_warning": True, "plot_featurename_len": 18},
+        "shap_plot_type": "summary",
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -142,6 +265,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write a model.yml snapshot alongside the joblib artefact.",
     )
+    parser.add_argument(
+        "--models",
+        default=",".join(DEFAULT_SUPERVISED_MODELS),
+        help="Kommagetrennte Liste an Schlüsselwörtern für zusätzliche Modelle (siehe --list-models).",
+    )
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Verfügbare Modellschlüssel ausgeben und beenden.",
+    )
     return parser.parse_args()
 
 
@@ -181,6 +314,22 @@ def _log_train_fraction(label: str, train_rows: int, total_rows: int) -> None:
 
 def main() -> None:
     args = parse_args()
+
+    if args.list_models:
+        print("Verfügbare Modelle:")
+        for key in sorted(MODEL_REGISTRY):
+            spec = MODEL_REGISTRY[key]
+            level = spec.get("level", "event")
+            print(f"  {key} ({level}): {spec['description']}")
+        return
+
+    selected_models = [entry.strip() for entry in args.models.split(",") if entry.strip()]
+    if selected_models:
+        unknown_models = [m for m in selected_models if m not in MODEL_REGISTRY]
+        if unknown_models:
+            raise SystemExit(f"Unbekannte Modellschlüssel: {', '.join(unknown_models)}")
+    else:
+        selected_models = []
 
     # Keep working directory stable so relative paths resolve against this script location.
     script_dir = Path(__file__).resolve().parent
@@ -463,58 +612,58 @@ def main() -> None:
         print("\nIsolation Forest abgeschlossen. Weitere Modelle übersprungen.")
         return
 
-    print("\nTraining anomaly detector on events (words)")
-    sad = AnomalyDetector()
-    sad.item_list_col = "e_words"
-    sad.train_df = df_events
-    sad.test_df = df_events
-    sad.prepare_train_test_data()
-    sad.train_LR()
-    df_pred = sad.predict()
-    print("Event-level predictions ready.")
-    train_stats.append(("event_lr_words", sad.train_df.height if sad.train_df is not None else 0, df_events.height))
-    _log_train_fraction("event_lr_words", sad.train_df.height if sad.train_df is not None else 0, df_events.height)
-
-    print("Switching to trigrams + DecisionTree")
-    sad.item_list_col = "e_trigrams"
-    sad.train_df = df_events
-    sad.test_df = df_events
-    sad.prepare_train_test_data()
-    sad.train_DT()
-    df_pred = sad.predict()
-    train_stats.append(("event_dt_trigrams", sad.train_df.height if sad.train_df is not None else 0, df_events.height))
-    _log_train_fraction("event_dt_trigrams", sad.train_df.height if sad.train_df is not None else 0, df_events.height)
-
-    if df_seqs is not None and len(df_seqs):
-        print("\nSequence-level anomaly detection with duration + length")
-        sad_seq = AnomalyDetector()
-        sad_seq.numeric_cols = ["seq_len", "duration_sec"]
-        sad_seq.train_df = df_seqs
-        sad_seq.test_df = df_seqs
-        sad_seq.prepare_train_test_data()
-        sad_seq.train_LR()
-        seq_pred = sad_seq.predict()
-        print("Sequence-level predictions ready.")
-        train_stats.append(
-            ("sequence_lr_numeric", sad_seq.train_df.height if sad_seq.train_df is not None else 0, df_seqs.height)
-        )
-        _log_train_fraction(
-            "sequence_lr_numeric", sad_seq.train_df.height if sad_seq.train_df is not None else 0, df_seqs.height
-        )
-
-        print("\nExplaining sequence model via SHAP (words vectorizer)")
-        sad_seq.item_list_col = "e_words"
-        sad_seq.numeric_cols = None
-        sad_seq.train_df = df_seqs
-        sad_seq.test_df = df_seqs
-        sad_seq.prepare_train_test_data()
-        sad_seq.train_LR()
-        seq_pred = sad_seq.predict()
-        explainer = ex.ShapExplainer(sad_seq, ignore_warning=True, plot_featurename_len=18)
-        explainer.calc_shapvalues()
-        explainer.plot(plottype="summary")
+    if not selected_models:
+        print("\nKeine zusätzlichen Modelle in --models angegeben; überspringe Phase E/F.")
     else:
-        print("\nNo sequence table available; skipping sequence-level AD and XAI.")
+        print("\nStarte konfigurierbare Anomalie-Detektoren (Phase E/F)")
+    for model_key in selected_models:
+        spec = MODEL_REGISTRY[model_key]
+        level = spec.get("level", "event")
+        dataset = df_events if level == "event" else df_seqs
+        if dataset is None or dataset.is_empty():
+            requirement = "Sequenzdaten" if level == "sequence" else "Eventdaten"
+            print(f"\n[{model_key}] übersprungen (benötigt {requirement}).")
+            continue
+
+        train_df = dataset
+        if spec.get("train_selector") == "correct_only":
+            if "test_case" in dataset.columns:
+                filtered = dataset.filter(pl.col("test_case") == "correct")
+                if filtered.is_empty():
+                    print(f"\n[{model_key}] übersprungen (keine 'correct'-Beispiele vorhanden).")
+                    continue
+                train_df = filtered
+            else:
+                print(f"\n[{model_key}] übersprungen (Spalte 'test_case' fehlt für Filterung).")
+                continue
+
+        print(f"\n[{model_key}] {spec['description']}")
+        detector = AnomalyDetector()
+        detector.item_list_col = spec.get("item_list_col")
+        numeric_cols = spec.get("numeric_cols")
+        detector.numeric_cols = numeric_cols if numeric_cols is not None else []
+        detector.train_df = train_df
+        detector.test_df = dataset
+        detector.prepare_train_test_data()
+
+        train_kwargs = spec.get("train_kwargs", {})
+        getattr(detector, spec["train_method"])(**train_kwargs)
+        detector.predict()
+        train_rows = detector.train_df.height if detector.train_df is not None else 0
+        total_rows = dataset.height
+        train_stats.append((spec["stat_label"], train_rows, total_rows))
+        _log_train_fraction(spec["stat_label"], train_rows, total_rows)
+
+        if spec.get("requires_shap"):
+            shap_kwargs = spec.get("shap_kwargs", {})
+            shap_plot_type = spec.get("shap_plot_type", "summary")
+            print("  -> SHAP-Erklärungen werden berechnet.")
+            explainer = ex.ShapExplainer(detector, **shap_kwargs)
+            explainer.calc_shapvalues()
+            explainer.plot(plottype=shap_plot_type)
+
+    if df_seqs is None or df_seqs.is_empty():
+        print("\nNo sequence table available; skipping sequence-level models.")
 
     print("\n[Summary] Full-data pipeline diagnostics:")
     for label, train_rows, total_rows in train_stats:

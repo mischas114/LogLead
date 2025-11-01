@@ -16,7 +16,7 @@
 | Datei | Status | Rolle im E2E-Prozess |
 | --- | --- | --- |
 | `demo/lo2_e2e/run_lo2_loader.py` | verlagert & ergänzt | Phase B: Loader nach `demo/lo2_e2e/` verschoben, Pfade vereinheitlicht, Service-Type-Filter und klare Output-Struktur (`demo/result/lo2/`). |
-| `demo/lo2_e2e/LO2_samples.py` | stark erweitert | Phasen C–E: bestehendes Skript aus `demo/` migriert, um Holdout/Threshold-Tuning, Modell-Persistenz (`--save-model`), Enhancer-Export, Kennzahlen (`--report-*`) und Metadata-Dump erweitert. |
+| `demo/lo2_e2e/LO2_samples.py` | stark erweitert | Phasen C–E: bestehendes Skript aus `demo/` migriert, um Holdout/Threshold-Tuning, Modell-Persistenz (`--save-model`), Enhancer-Export, Kennzahlen (`--report-*`), Metadata-Dump **und** ein konfigurierbares Modell-Registry (`--models` / `--list-models`) erweitert. |
 | `demo/lo2_e2e/metrics_utils.py` | neu | Kennzahlen-Helfer für Precision@k, FP-Rate@α, PSI auf den IF-Scores. |
 | `demo/lo2_e2e/lo2_phase_f_explainability.py` | neu | Phase F: Reproduziert bestes IF-Setup, erstellt NN-Mapping, SHAP-Plots, False-Positive-Reports – erste automatisierte Explainability-Stufe. |
 | `demo/lo2_e2e/README.md` | neu | Quickstart mit drei Kommandos über alle Phasen hinweg. |
@@ -34,5 +34,12 @@
    → legt NN-Mappings, SHAP-Plots und XAI-Metriken unter `demo/result/lo2/explainability/` ab.
 
 Damit ist der komplette Weg von LO2-Rohlogs bis Explainability reproduzierbar dokumentiert und automatisiert.
+
+## Dokumentations-Backlog (ToDos)
+- `docs/DATENVERARBEITUNG_INTEGRATION.md` nachziehen: Abschnitt zu konfigurierbaren Modellen ergänzen, Diagramm mit Phase-E-Varianten erweitern, offene Fragen aktualisieren.
+- `docs/LO2_e2e_pipeline.md` aktualisieren: `--models` Flag samt Beispiel aufnehmen, Default-Modelle tabellarisch erklären, Quickstart-Befehle vereinheitlichen.
+- `docs/LO2_IF_E2E.md` prüfen: Threshold-/Holdout-Beschreibung gegen aktuelle CLI-Parameter abgleichen (z. B. `--if-threshold-percentile`).
+- Bilder (`architektur-v1.png`, `image-1.png`) mit neuem Explainability-Flow (NN mapping + SHAP) refreshen.
+- `docs/NEXT_STEPS.md` um wartbare Dokumentations-Changelog-Sektion ergänzen, damit zukünftige Anpassungen nachvollziehbar bleiben.
 
 ----
