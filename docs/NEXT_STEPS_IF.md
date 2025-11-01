@@ -206,10 +206,7 @@ docs/NEXT_STEPS_IF.md
 - `demo/result/lo2/metrics/lr_full.json`  
 - `demo/result/lo2/metrics/dt_full.json`  
 - Commit: 1b9fcbc22c87b95051e82074e71ef3ae4e5a11e9  
-<!-- AUTOGEN:IF_NEXT_STEPS:END -->
-docs/LO2_e2e_pipeline.md
 
-<!-- AUTOGEN:LO2_STATUS:BEGIN -->
 ## Aktueller Modellstatus
 
 **Pipeline-Änderungen:**  
@@ -227,7 +224,7 @@ docs/LO2_e2e_pipeline.md
 
 **Empfehlung:**  
 LR/DT als produktionsnahe Benchmarks führen; der IF bleibt als Lehr-/Demo-Artefakt mit dokumentierten Grenzen bestehen.  
-<!-- AUTOGEN:LO2_STATUS:END -->
+
 PR-Beschreibung (Kurzform)
 
 Was: IF-Metriken mit Drain-ID/Feature-Erweiterungen eingepflegt, schwache Performance tabellarisch belegt. LR/DT-Benchmarks aus demo/result/lo2/metrics/*.json hervorgehoben. Holdout-Hinweis ergänzt („Downsampling occurred: yes“ = 5 % Reserve). Nächste Schritte (IF-contamination-Sweep, LR-Threshold-Tuning) dokumentiert.
