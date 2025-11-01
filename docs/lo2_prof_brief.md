@@ -1,4 +1,4 @@
-# LO2 Pipeline – Kurzüberblick für Review/Verteidigung
+# LO2 Pipeline – Kurzüberblick für Review
 
 Dieses Paper soll in wenigen Minuten zeigen, was aktuell funktioniert, was hinzugefügt wurde und wo noch Lücken liegen. Es fasst den LO2-Demo-Flow bewusst einfacher zusammen als die ausführliche `LO2_architektur_detail.md`.
 
