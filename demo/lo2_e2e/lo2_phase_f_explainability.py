@@ -21,6 +21,7 @@ import numpy as np
 import polars as pl
 import shap
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+import joblib
 
 from loglead import AnomalyDetector
 from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
@@ -70,6 +71,12 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Wie viele Normalfälle ergänzend berücksichtigt werden (0 = alle).",
     )
+    parser.add_argument(
+        "--load-model",
+        type=Path,
+        default=None,
+        help="Optional: vorhandenes IF+Vectorizer-Bundle laden und Training überspringen.",
+    )
     return parser.parse_args()
 
 
@@ -113,6 +120,31 @@ def train_if(df_events: pl.DataFrame, args: argparse.Namespace):
     sad_if = AnomalyDetector(item_list_col=item_col, numeric_cols=numeric_cols)
     sad_if.train_df = df_events.filter(pl.col("test_case") == "correct")
     sad_if.test_df = df_events
+
+    # Optional: vorhandenes Bundle laden
+    model_loaded = False
+    if getattr(args, "load_model", None):
+        load_path = args.load_model
+        if not load_path.is_absolute():
+            load_path = load_path.resolve()
+        if load_path.exists():
+            try:
+                loaded = joblib.load(load_path)
+                if isinstance(loaded, tuple) and len(loaded) == 2:
+                    model, vec = loaded
+                elif isinstance(loaded, dict):
+                    model = loaded.get("model")
+                    vec = loaded.get("vectorizer") or loaded.get("vec")
+                else:
+                    raise ValueError("Unrecognized model bundle format")
+                sad_if.model = model
+                sad_if.vec = vec
+                model_loaded = True
+                print(f"[INFO] Bestehendes IF-Modell geladen: {load_path}")
+            except Exception as exc:
+                print(f"[WARN] Konnte Modellbundle nicht laden ({load_path}): {exc}. Trainiere neu.")
+
+    # Features vorbereiten (nutzt vorhandenen Vektorizer falls gesetzt)
     sad_if.prepare_train_test_data()
 
     max_samples = args.if_max_samples
@@ -122,12 +154,13 @@ def train_if(df_events: pl.DataFrame, args: argparse.Namespace):
         else:
             raise SystemExit("--if-max-samples muss 'auto' oder eine Ganzzahl sein.")
 
-    sad_if.train_IsolationForest(
-        filter_anos=True,
-        n_estimators=args.if_n_estimators,
-        contamination=args.if_contamination,
-        max_samples=max_samples,
-    )
+    if not model_loaded:
+        sad_if.train_IsolationForest(
+            filter_anos=True,
+            n_estimators=args.if_n_estimators,
+            contamination=args.if_contamination,
+            max_samples=max_samples,
+        )
     pred_if = sad_if.predict()
     # Score & Ranking analog Phase D
     score_if = (-sad_if.model.score_samples(sad_if.X_test)).tolist()

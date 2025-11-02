@@ -221,6 +221,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional path for persisting the trained IsolationForest model and vectorizer via joblib.",
     )
     parser.add_argument(
+        "--load-model",
+        type=Path,
+        default=None,
+        help="Optional path to an existing IsolationForest+vectorizer bundle to reuse and skip retraining.",
+    )
+    parser.add_argument(
         "--overwrite-model",
         action="store_true",
         help="Allow replacing an existing model dump when --save-model is provided.",
@@ -427,7 +433,7 @@ def main() -> None:
         return
 
     # Isolation Forest baseline (Phase D)
-    print("\nTraining Isolation Forest on event words (Phase D)")
+    print("\nTraining/Loading Isolation Forest on event words (Phase D)")
     numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
     sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
     # IsolationForest learns only from normal runs; keep anomalies in test_df for evaluation.
@@ -451,6 +457,34 @@ def main() -> None:
             downsampling_performed = True
     sad_if.train_df = correct_events
     sad_if.test_df = df_events
+
+    # Try loading an existing bundle if provided
+    model_loaded = False
+    if args.load_model is not None:
+        load_path = args.load_model
+        if not load_path.is_absolute():
+            load_path = (orig_cwd / load_path).resolve()
+        if load_path.exists():
+            try:
+                loaded = joblib.load(load_path)
+                # Support both tuple and dict-style bundles
+                if isinstance(loaded, tuple) and len(loaded) == 2:
+                    model, vec = loaded
+                elif isinstance(loaded, dict):
+                    model = loaded.get("model")
+                    vec = loaded.get("vectorizer") or loaded.get("vec")
+                else:
+                    raise ValueError("Unrecognized model bundle format")
+                sad_if.model = model
+                sad_if.vec = vec
+                model_loaded = True
+                print(f"Loaded existing IF model bundle from {load_path}")
+            except Exception as exc:
+                print(f"[WARN] Could not load model bundle from {load_path}: {exc}. Will train a new model.")
+        else:
+            print(f"[INFO] No existing model found at {load_path}; training a new model.")
+
+    # Prepare features (reuses existing vectorizer if present)
     sad_if.prepare_train_test_data()
 
     max_samples = args.if_max_samples
@@ -460,12 +494,13 @@ def main() -> None:
         else:
             raise SystemExit("--if-max-samples muss 'auto' oder eine Ganzzahl sein.")
 
-    sad_if.train_IsolationForest(
-        filter_anos=True,
-        n_estimators=args.if_n_estimators,
-        contamination=args.if_contamination,
-        max_samples=max_samples,
-    )
+    if not model_loaded:
+        sad_if.train_IsolationForest(
+            filter_anos=True,
+            n_estimators=args.if_n_estimators,
+            contamination=args.if_contamination,
+            max_samples=max_samples,
+        )
     pred_if = sad_if.predict()
 
     # Add raw anomaly scores and dense ranking for inspection.

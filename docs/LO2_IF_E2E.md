@@ -13,11 +13,11 @@ Dieses Dokument fasst den End-to-End-Ablauf der LO2 Anomalieerkennung zusammen u
 3. **Labels:** Der Loader setzt `test_case` (`"correct"`/Fehlername) und `anomaly` (0/1); Fixup: Trainingsdaten enthalten ausschließlich `test_case == "correct"`.
 4. **Hauptskript:**  
    ```bash
-   python demo/lo2_e2e/LO2_samples.py \
-     --phase if \
-     --save-model models/lo2_if.joblib \
-     --if-holdout-fraction 0.1 \
-     --if-threshold-percentile 99.5
+    python demo/lo2_e2e/LO2_samples.py \
+       --phase if \
+       --save-model models/lo2_if.joblib \
+       --if-holdout-fraction 0.1 \
+       --if-threshold-percentile 99.5
    ```  
    Mit `--models` lässt sich bestimmen, welche zusätzlichen Detektoren neben dem IsolationForest laufen (Standard: `event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`). `--list-models` zeigt die verfügbaren Schlüssel.
 
@@ -29,6 +29,20 @@ Loader → Parquet (`lo2_events.parquet`)
 → Isolation Forest trainiert & scored  
 → Optional: Hold-out-Schwelle + Metriken  
 → Artefakte: `lo2_if_predictions.parquet`, `models/lo2_if.joblib`, `model.yml`, `metrics/*.json`
+
+**Modell-Reuse:** Statt neu zu trainieren, kann ein vorhandenes Bundle geladen werden:
+
+```bash
+python demo/lo2_e2e/LO2_samples.py --phase if --load-model models/lo2_if.joblib
+```
+
+Auch Phase F unterstützt Reuse:
+
+```bash
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+   --root demo/result/lo2 \
+   --load-model models/lo2_if.joblib
+```
 
 ## 1. Datenaufbereitung
 
@@ -61,7 +75,7 @@ Loader → Parquet (`lo2_events.parquet`)
 ## 6. Persistenz & Metriken
 
 - Predictions: `lo2_if_predictions.parquet` (`demo/lo2_e2e/LO2_samples.py:355-363`).
-- Modelle: `--save-model` speichert `(model, vectorizer)` via joblib (`demo/lo2_e2e/LO2_samples.py:404-423`).
+- Modelle: `--save-model` speichert `(model, vectorizer)` via joblib. Mit `--load-model <pfad>` kann ein bestehendes Bundle geladen und das Training übersprungen werden.
 - Optional: `--dump-metadata` erzeugt `models/model.yml` mit Parameter- und Dataset-Infos (`demo/lo2_e2e/LO2_samples.py:426-458`).
 - Metriken: `--report-precision-at`, `--report-fp-alpha`, `--report-psi` schreiben JSON/CSV nach `result/lo2/metrics/` (`demo/lo2_e2e/LO2_samples.py:365-402`).
 

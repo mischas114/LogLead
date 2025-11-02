@@ -18,7 +18,7 @@
 		 --output-dir demo/result/lo2
 	 ```
 
-2. **Trainiere Isolation Forest & speichere Modell + Metriken:**
+2. **Trainiere Isolation Forest & speichere Modell + Metriken (oder lade bestehendes Modell):**
 	 ```bash
 	 MPLBACKEND=Agg python demo/lo2_e2e/LO2_samples.py \
         --phase full \
@@ -34,6 +34,15 @@
         --metrics-dir demo/result/lo2/metrics \
         --save-enhancers \
         --enhancers-output-dir demo/result/lo2/enhanced
+	 ```
+
+	 Oder, um ein vorhandenes Bundle wiederzuverwenden und das Training zu überspringen:
+
+	 ```bash
+	 python demo/lo2_e2e/LO2_samples.py \
+	   --phase if \
+	   --load-model demo/result/lo2/models/lo2_if.joblib \
+	   --save-if demo/result/lo2/lo2_if_predictions.parquet
 	 ```
 	 
 	*Begründung der Parameterwahl:*
@@ -52,13 +61,19 @@
         --root demo/result/lo2 \
         --if-contamination 0.15 \
         --nn-top-k 50 \
-        --shap-sample 200
+  --shap-sample 200 \
+  --load-model demo/result/lo2/models/lo2_if.joblib
 	 ```
 
 ---
 
 **Alle Outputs findest du unter `demo/result/lo2/` und `models/`. Die Reihenfolge ist wichtig!**
 - **Persist context:** Use `--save-model` and `--dump-metadata` to bundle the model, threshold, dataset sizes, and git commit into `models/` for reproducible scoring across sessions.
+
+### Reuse vs. Retrain
+
+- **Reuse (--load-model)**, wenn Feature-Schema unverändert ist, Score-Drift niedrig und du schnell scoren willst.
+- **Retrain**, wenn sich Features/Parser geändert haben (z. B. Wechsel zu `e_event_drain_id`), deutliche Drift (PSI↑) oder du die Schwelle neu kalibrieren möchtest.
 
 
 ## Phase F Review

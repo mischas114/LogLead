@@ -12,12 +12,29 @@ This folder groups the runnable scripts for the LO2 pipeline, covering data load
    ```bash
    python demo/lo2_e2e/LO2_samples.py --phase full --save-enhancers --save-model models/lo2_if.joblib
    ```
-   The `--save-model` argument stores the IsolationForest + vectorizer bundle for reuse; add `--overwrite-model` when replacing an existing dump.
+   The `--save-model` argument stores the IsolationForest + vectorizer bundle for reuse; add `--overwrite-model` when replacing an existing dump. To reuse an existing bundle and skip retraining, pass `--load-model models/lo2_if.joblib`.
    Additional opt-in benchmarking aids: `--if-holdout-fraction 0.1 --if-threshold-percentile 99.5 --report-precision-at 100 --report-fp-alpha 0.005 --report-psi --metrics-dir result/lo2/metrics --dump-metadata`.
 3. **Create explainability artefacts**
    ```bash
    MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --shap-sample 200
    ```
+
+### Fast scoring with an existing model
+
+Once you saved a bundle, you can score new data without retraining:
+
+```bash
+python demo/lo2_e2e/LO2_samples.py --phase if --load-model models/lo2_if.joblib
+```
+
+Phase F can also reuse the model for its artefacts:
+
+```bash
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+   --root demo/result/lo2 \
+   --load-model models/lo2_if.joblib \
+   --shap-sample 200
+```
 
 All outputs are written beneath `demo/result/lo2` by default. Adjust CLI options to mirror your dataset size and desired sampling behaviour.
 
