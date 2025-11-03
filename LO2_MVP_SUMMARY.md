@@ -143,10 +143,10 @@ Added LO2 to the list of supported loaders with reference to detailed documentat
 
 ### 3. **Existing LO2 Documentation**
 The following documentation files already exist:
-- `docs/LO2_architektur_detail.md`: Architecture details
-- `docs/LO2_e2e_pipeline.md`: Consolidated end-to-end pipeline, persistence, and tuning guide
-- `docs/LO2_enhanced_exports.md`: Enhanced exports
-- `docs/NEXT_STEPS.md`: Next steps and iteration plans
+- `docs/pipeline/architecture.md`: Architecture details
+- `docs/pipeline/execution-guide.md`: Consolidated end-to-end pipeline, persistence, and tuning guide
+- `docs/operations/artifact-handling.md`: Enhanced exports and persistence strategy
+- `docs/roadmap/improvement-plan.md`: Next steps and iteration plans
 
 ## Integration Points
 
