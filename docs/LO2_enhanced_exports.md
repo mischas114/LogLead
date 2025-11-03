@@ -13,6 +13,11 @@ These "enhanced" tables contain the event- and sequence-level data **after** fea
 - Length metrics (`e_chars_len`, `e_words_len`, etc.)
 - Sequence aggregations (token bags, durations, lengths) when sequence data is present
 
+### Aktuelle Schemas
+
+- `lo2_sequences_enhanced.parquet` (`demo/result/lo2/enhanced/lo2_sequences_enhanced.parquet`): `seq_id` (string), `m_message` (string), `normal` (bool), `start_time`/`end_time` (timestamp\[us\]), `anomaly` (bool), `is_fp_allowlisted` (bool), `seq_len` (uint32), `e_event_id_len` (uint32), `duration` (duration\[us\]), `duration_sec` (int64), `e_words` (Liste string), `e_words_len` (uint32), `e_trigrams` (Liste string), `e_trigrams_len` (uint32).
+- `lo2_events_enhanced.parquet` (`demo/result/lo2/enhanced/lo2_events_enhanced.parquet`): `row_id` (int64), `m_message` (string), `run` (string), `test_case` (string), `service` (string), `seq_id` (string), `normal` (bool), `m_timestamp` (timestamp\[us\]), `anomaly` (bool), `is_fp_allowlisted` (bool), `anomaly_original` (bool), `e_message_normalized` (string), `e_words` (Liste string), `e_words_len` (uint32), `e_trigrams` (Liste string), `e_trigrams_len` (uint32), `e_event_drain_id` (string), `e_chars_len` (uint32), `e_lines_len` (uint32), `e_event_id_len` (int32).
+
 ## Why they exist
 
 Saving the enhanced Parquets is a convenience feature. It lets you:
