@@ -266,7 +266,13 @@ class LO2Loader(BaseLoader):
             pl.col("m_timestamp").min().alias("start_time"),
             pl.col("m_timestamp").max().alias("end_time")
         ])
-        self.df_seq = self.df_seq.drop(["test_case", "service"])
+        derived_test_case = pl.col("seq_id").str.split("__").list.get(1)
+        self.df_seq = self.df_seq.with_columns(
+            pl.coalesce(pl.col("test_case"), derived_test_case).alias("test_case")
+        )
+
+        if "service" in self.df_seq.columns:
+            self.df_seq = self.df_seq.drop("service")
 
     def _add_anomaly_column(self):
         self.df = self.df.with_columns(

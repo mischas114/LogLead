@@ -1,7 +1,7 @@
 ---
 title: Modell-Registry Katalog
 summary: Übersicht über alle per CLI zuschaltbaren Modelle der LO2-Pipeline.
-last_updated: 2025-11-03
+last_updated: 2025-11-05
 ---
 
 # Modell-Registry Katalog
@@ -10,7 +10,7 @@ Die LO2-Pipeline bringt eine deklarative Modell-Registry mit 14 Einträgen. Übe
 
 ## Kategorien
 
-- **Baseline:** IsolationForest (`Phase D`), immer aktiv.
+- **Baseline:** IsolationForest (`Phase D`), immer aktiv – aktuell als Referenz für Drift, nicht für präzise Anomaliedetektion geeignet.
 - **Supervised (Sequence):** LogisticRegression, LinearSVM, DecisionTree, RandomForest, XGBoost.
 - **Un-/Semi-Supervised (Sequence):** LOF, OneClassSVM, KMeans, RarityModel, OOVDetector.
 - **Sequence (numeric/token):** LogisticRegression auf numerischen bzw. tokenbasierten Features, inkl. SHAP-Variante.
@@ -19,17 +19,17 @@ Die LO2-Pipeline bringt eine deklarative Modell-Registry mit 14 Einträgen. Übe
 
 | Schlüssel | Ebene | Eingangsdaten | Stärken | Stolpersteine |
 | --- | --- | --- | --- | --- |
-| `event_lr_words` | Sequence | Tokens (`e_words`) | Solide Baseline, interpretierbar | Braucht Labels, kein automatischer Split |
-| `event_lsvm_words` | Sequence | Tokens | Robuste Trennschärfe | Keine Wahrscheinlichkeiten, ggf. langsam |
+| `event_lr_words` | Sequence | Tokens (`e_words`) | Solide Baseline, interpretierbar | Braucht Labels, Hold-out aktiv (20 % Runs) |
+| `event_lsvm_words` | Sequence | Tokens | Robuste Trennschärfe | Keine Wahrscheinlichkeiten, ggf. langsamer |
 | `event_dt_trigrams` | Sequence | Trigramme | Decision Paths verständlich | Overfitting bei vollem Datensatz |
-| `event_rf_words` | Sequence | Tokens | Ensemble-robust | Höherer Speicherbedarf |
-| `event_xgb_words` | Sequence | Tokens | Flexible Hyperparameter | Längere Trainingszeit |
+| `event_rf_words` | Sequence | Tokens | Ensemble-robust, sehr hohe Scores im Hold-out | Höherer Speicherbedarf, Overfitting prüfen |
+| `event_xgb_words` | Sequence | Tokens | Flexible Hyperparameter, starkes Ranking | Längere Trainingszeit |
 | `event_lof_words` | Sequence | Tokens (correct-only) | Lokaler Outlier-Fokus | Sensibel für Skalierung |
 | `event_oneclass_svm_words` | Sequence | Tokens (correct-only) | Präziser Normalraum | Konvergenzprobleme möglich |
 | `event_kmeans_words` | Sequence | Tokens | Schnelle Clusterbildung | Keine Wahrscheinlichkeiten |
 | `event_rarity_words` | Sequence | Tokenstatistik | Ohne Training nutzbar | Kaum Schwellenlogik |
 | `event_oov_words` | Sequence | Tokens + Längen | Findet unbekannte Tokens | Vokabulargröße abstimmen |
-| `sequence_lr_numeric` | Sequence | `seq_len`, `duration`, numerische Features | Schnell, robust | Verzichtet auf Tokenkontext |
+| `sequence_lr_numeric` | Sequence | `seq_len`, `duration_sec`, `e_words_len`, `e_trigrams_len` | Schnell, robust | Verzichtet auf Tokenkontext |
 | `sequence_lr_words` | Sequence | Tokenbuckets pro Sequenz | Erfasst Sequenzmuster | Größere Matrizen |
 | `sequence_shap_lr_words` | Sequence | Tokenbuckets | SHAP-Erklärungen | Rechenintensiv |
 

@@ -1,12 +1,12 @@
 ---
 title: Isolation-Forest Leitfaden
-summary: Training, Schwellenkalibrierung und Verbesserungsplan für den LO2 Isolation Forest.
-last_updated: 2025-11-03
+summary: Training, Schwellenkalibrierung und aktueller Verbesserungsplan für den LO2 Isolation Forest.
+last_updated: 2025-11-05
 ---
 
 # Isolation-Forest Leitfaden
 
-Der Isolation Forest bildet die zentrale unsupervised Baseline der LO2-Pipeline. Dieses Dokument bündelt Ablauf, Parameterempfehlungen und aktuelle Erkenntnisse.
+Der Isolation Forest bildet die zentrale unsupervised Baseline der LO2-Pipeline. Dieses Dokument bündelt Ablauf, Parameterempfehlungen und aktuelle Erkenntnisse. Die jüngsten Läufe (50 % Anomalien im Sample) zeigen allerdings deutliche Qualitätsprobleme: Accuracy ≈0.45, F1 ≈0.0, AUC ≈0.0 trotz angepasster Kontamination.
 
 ## Ablauf im Überblick
 
@@ -25,12 +25,12 @@ Der Isolation Forest bildet die zentrale unsupervised Baseline der LO2-Pipeline.
 python demo/lo2_e2e/LO2_samples.py \
   --phase if \
   --if-item e_words \
-  --if-contamination 0.15 \
-  --if-holdout-fraction 0.05 \
-  --if-threshold-percentile 99.5 \
-  --report-precision-at 200 \
+  --if-numeric seq_len,duration_sec,e_words_len,e_trigrams_len \
+  --if-contamination 0.45 \
+  --if-holdout-fraction 0.20 \
+  --if-threshold-percentile 95 \
+  --report-precision-at 50 \
   --report-fp-alpha 0.01 \
-  --report-psi \
   --save-if demo/result/lo2/lo2_if_predictions.parquet \
   --save-model demo/result/lo2/models/lo2_if.joblib \
   --dump-metadata \
@@ -48,9 +48,10 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 ## Parameterleitfaden
 
 - `--if-item`: Start mit `e_words`, Alternativen `e_event_drain_id`, `e_trigrams`. Kombinationen via `--if-numeric` ergänzen.
-- `--if-contamination`: 0.10–0.25 testen, abhängig vom Fehleranteil im Trainingsset.
-- `--if-holdout-fraction`: 0.05–0.10, reserviert frische Normaldaten für Drift/Threshold.
-- `--if-threshold-percentile`: 99.0–99.5 liefern kontrollierbare Alert-Raten.
+- `--if-numeric`: Sequenz-Parquet enthält aktuell `seq_len`, `duration_sec`, `e_words_len`, `e_trigrams_len` – event-spezifische Spalten wie `e_chars_len` stehen hier nicht zur Verfügung.
+- `--if-contamination`: An das Verhältnis korrekter Runs anpassen (bei 50 % Fehleranteil ≈0.45); niedrigere Werte führen zu massiven FP-Raten.
+- `--if-holdout-fraction`: 0.10–0.20, reserviert frische Normaldaten für Drift/Threshold.
+- `--if-threshold-percentile`: 95–99.5 liefern kontrollierbare Alert-Raten; ohne Hold-out Trainingsscores als Notlösung nutzen.
 - `--if-max-samples`: Bei großen Datasets limitieren (z. B. 100 000) um Laufzeit zu reduzieren.
 - `--report-precision-at`, `--report-fp-alpha`: Konsistente Kennzahlen für Vergleich.
 
@@ -64,7 +65,8 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 
 ## Beobachtungen aus den letzten Runs
 
-- **Baseline (Word-Features, Kontamination 0.15):** Accuracy ~0.80, F1 ~0.09, AUC ~0.50 – hohe False-Positive-Rate, Scores trennen Normal/Anomal kaum.
+- **Aktuelle Stichprobe (Word-Features, Kontamination 0.45, Hold-out 20 %):** Accuracy 0.45, F1 0.00, AUC 0.00 – 100 % der Top-Scores stammen aus `correct`-Runs, das Modell verfehlt sämtliche Anomalien.
+- **Frühere Baseline (Kontamination 0.15):** Accuracy ~0.80, F1 ~0.09, AUC ~0.50 – bereits schwache Trennung, jetzt durch geändertes Verhältnis weiter verschlechtert.
 - **Drain-ID + numerische Längen:** Accuracy ~0.71, F1 ~0.11, AUC ~0.50 – minimale Verbesserung; höhere Kontamination erhöht FP-Anteil.
 - **Logistic Regression (Wort-Features):** AUC ~0.86, F1 ~0.17 – zeigt, dass Features prinzipiell tragen; Schwellenproblem statt Feature-Defizit.
 - **Decision Tree / Sequence-LR:** Perfekte bzw. sehr hohe Scores, jedoch Overfitting (Trainingsmetriken), Sequenz-LR basiert auf kleiner Stichprobe.
@@ -72,10 +74,10 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 
 ## Verbesserungsplan
 
-- Mehr korrekte Runs einbeziehen (`--errors-per-run` senken oder dedizierte Normal-Batches).
-- Feature-Mix erweitern (`e_event_drain_id` + numerische Sequenzmerkmale), ggf. `--if-numeric` ergänzen (`e_chars_len`, `e_event_id_len`, `seq_len`).
+- Mehr korrekte Runs einbeziehen (`--runs` erhöhen, `--errors-per-run` reduzieren), damit das Training nicht von Anomalien überlagert wird.
+- Feature-Mix erweitern (`e_event_drain_id`, Sequenzlängen/-dauern) und optional aggregierte Event-Längen nachrüsten, falls benötigt.
 - Unterschiedliche Services getrennt trainieren (z. B. Token-only Trainingssplit) und Ergebnisse vergleichen.
-- Hold-out größer wählen und PSI beobachten; bei Drift Re-Training auslösen.
+- Hold-out beibehalten (≥20 %) und PSI beobachten; bei Drift oder dauerhaft schlechten Metriken Re-Training oder Modellwechsel prüfen.
 - Bei wiederholten Läufen `--overwrite-enhancers` setzen, falls Feature-Caches aktualisiert werden sollen.
 
 ## Troubleshooting

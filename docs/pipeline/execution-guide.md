@@ -32,7 +32,7 @@ python demo/lo2_e2e/LO2_samples.py \
   --phase full \
   --if-contamination 0.15 \
   --if-item e_words \
-  --if-numeric e_chars_len \
+  --if-numeric seq_len,duration_sec,e_words_len,e_trigrams_len \
   --save-model models/lo2_if.joblib \
   --report-precision-at 200 \
   --report-fp-alpha 0.01 \
@@ -47,7 +47,6 @@ python demo/lo2_e2e/LO2_samples.py \
   --sup-holdout-min-groups 1 \
   --sup-holdout-shuffle \
   --metrics-dir demo/result/lo2/metrics \
-  --dump-metadata
 > Hinweis: Ohne `--skip-if` läuft Phase D (Isolation Forest) mit und liefert Baseline-Scores; bei aktiviertem Flag wird er vollständig übersprungen.
 > Hold-out-Splits nutzen optimal `run` (und optional `test_case`/`service`). Fehlen diese Spalten, greift ein Fallback-Split auf Basis der `anomaly`-Labels/Zeilenanzahl.
 
@@ -58,6 +57,13 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --nn-top-k 50 \
   --shap-sample 200
 ```
+
+### Empfohlene Modell-Linien (Stand 2025-11-05)
+
+- **Isolation Forest (Phase D):** Nur als unsupervised Referenz behalten, wenn ein Modell für Drift-Erkennung benötigt wird. Bei 50 % Fehleranteil `--if-contamination` anheben (≈0.45) und Hold-out aktivieren (`--if-holdout-fraction 0.2`). Erwartete Metriken: Accuracy ≈0.45, F1 ≈0.0 auf aktuellem Sample.
+- **Supervised Sequenz-Modelle:** `event_lsvm_words`, `event_rf_words`, `event_xgb_words` liefern auf dem 40-Sequenzen-Hold-out Accuracy ≥0.97. Kombination mit `sequence_shap_lr_words` erlaubt direkt SHAP-Analysen.
+- **Logistic Regression (Tokens):** `event_lr_words`/`sequence_lr_words` bilden das leichtgewichtige Baseline-Set; in Kombination mit SHAP geeignet für schnelle Debug-Sessions.
+- **Numerische Features:** Für alle Sequenzmodelle stehen aktuell nur `seq_len`, `duration_sec`, `e_words_len`, `e_trigrams_len` zur Verfügung. Event-spezifische Felder wie `e_chars_len` existieren nicht im Sequenz-Parquet.
 
 > Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` zeigt alle Registry-Schlüssel. Ohne `--models` läuft das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) – alle Modelle arbeiten auf sequenzbasierten Token-Features.
 
@@ -102,3 +108,10 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 - Fehlen Parquets → Loader erneut mit identischen Flags ausführen.
 - Schwache IF-Scores → mehr Normaldaten laden, `--if-item` wechseln, numerische Features ergänzen.
 - SHAP-Fehler → `--shap-sample` reduzieren, um RAM zu sparen.
+
+## Nächste Schritte
+
+- Datengrundlage verbreitern: Mehr "correct"-Runs und zusätzliche Fehler einspielen, bevor 100 %-Hold-out-Scores als belastbar gelten.
+- IsolationForest triagieren: Feature-Set (Drain-IDs, numerische Sequenzmerkmale) erweitern und alternative Kontaminationswerte testen; falls keine Verbesserung sichtbar ist, IF als reines Drift-Signal behandeln.
+- CLI säubern: Deprecation-Warnung (`DataFrame.with_row_count`) durch Umstieg auf `with_row_index` adressieren.
+- Ergebnis-Tracking vereinheitlichen: Metrik-JSONs aus `demo/result/lo2/metrics` konsolidieren (Notebook/CSV) und gegenüberstellen.

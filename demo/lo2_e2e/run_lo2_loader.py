@@ -237,6 +237,14 @@ def main() -> None:
             if "start_time_right" in seq_batch.columns:
                 seq_batch = seq_batch.drop("start_time_right")
 
+            test_case_expr = pl.col("seq_id").str.split("__").list.get(1)
+            if "test_case" not in seq_batch.columns:
+                seq_batch = seq_batch.with_columns(test_case_expr.alias("test_case"))
+            else:
+                seq_batch = seq_batch.with_columns(
+                    pl.col("test_case").fill_null(test_case_expr).alias("test_case")
+                )
+
             required_columns = {"seq_id", "start_time", "end_time", "duration"}
             missing = required_columns - set(seq_batch.columns)
             if missing:
