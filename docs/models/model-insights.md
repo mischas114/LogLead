@@ -6,15 +6,15 @@ last_updated: 2025-11-03
 
 # Modellbefunde & Metriken
 
-Die bisherigen Läufe konzentrieren sich auf drei Konfigurationen: Supervised-Event-Modelle, unsupervised Alternativen und Sequenzmodelle. Alle Zahlen stammen aus vollständigen Trainingsdaten – ein separater Validierungssplit steht noch aus.
+Die bisherigen Läufe konzentrieren sich auf drei Konfigurationen: Supervised-Sequenzmodelle auf Token-Features, unsupervised Sequenzmodelle und numerische Sequenzmodelle. Supervised-Varianten nutzen jetzt standardmäßig einen run-basierten Hold-out (20 %), während die unsupervised Modelle weiterhin auf dem Volltraining basieren.
 
 ## Zusammenfassung der letzten Runs
 
 | Paket | Modelle | Stichpunkte |
 | --- | --- | --- |
-| Supervised (Event) | LR, LinearSVM, DecisionTree, RandomForest, XGBoost | Trainingsmetriken sehr hoch (teilweise 100 %); Aussagekraft begrenzt, da keine Hold-out-Prüfung. |
-| Un-/Semi-Supervised (Event) | LOF, OneClassSVM, KMeans, Rarity, OOV | Starke Schwankungen: LOF F1≈0.009, OneClassSVM F1≈0.056, KMeans trennt kaum (AUC~0.50), Rarity kollabiert, OOVDetector meldet 100 % Accuracy (vermutlich Leakage). |
-| Sequenzmodelle | Sequence-LR (numeric/words), Sequence-SHAP | Liefert hohe Scores, basiert aber auf wenigen Sequenzen → Overfitting wahrscheinlich. |
+| Supervised (Sequence) | LR, LinearSVM, DecisionTree, RandomForest, XGBoost | Run-basierter Hold-out (20 %) pro Service/Test-Case aktiviert; Trainingsscores bleiben hoch, Evaluation erfolgt auf separaten Runs. |
+| Un-/Semi-Supervised (Sequence) | LOF, OneClassSVM, KMeans, Rarity, OOV | Starke Schwankungen: LOF F1≈0.009, OneClassSVM F1≈0.056, KMeans trennt kaum (AUC~0.50), Rarity kollabiert, OOVDetector meldet 100 % Accuracy (vermutlich Leakage). |
+| Sequenzmodelle (numeric) | Sequence-LR (numeric/words), Sequence-SHAP | Liefert hohe Scores, basiert aber auf wenigen Sequenzen → Overfitting wahrscheinlich. |
 
 ## Detailauszug (unsupervised Paket)
 
@@ -30,12 +30,11 @@ Quelle: Lauf vom `demo/lo2_e2e/LO2_samples.py` mit `--models event_lof_words,eve
 
 ## Interpretationshilfe
 
-- Supervised-Modelle dienen aktuell nur als Feature-/Explainability-Referenz. Für valide Aussagen muss ein zeit- oder run-basierter Split ergänzt werden.
+- Supervised-Modelle liefern jetzt belastbare Werte auf einem hold-out von 20 % der Runs (temporal per Service/Test-Case). Aussagekraft verbessert, dennoch auf Verzerrungen durch kleine Testmengen achten.
 - IsolationForest bleibt Referenz für unüberwachtes Verhalten, trotz schwacher F1-Werte (siehe `pipeline/isolation-forest.md`).
 - Sequence-Modelle liefern interpretierbare Signale, Repräsentativität aber unklar (kleine Stichprobe).
 
 ## ToDos für belastbare Benchmarks
 
-- TODO: Run-basierten Train/Test-Split implementieren und alle Modelle erneut bewerten.
 - TODO: Ergebnisse inkl. Konfigurationen zentral (CSV/Notebook) erfassen statt als Konsolenlog.
 - TODO: Leakage-Quellen für OOVDetector und RarityModel identifizieren (z. B. Tokenlisten, Normalisierungen).

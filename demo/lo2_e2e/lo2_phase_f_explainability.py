@@ -99,7 +99,7 @@ def write_lines(path: Path, lines: Iterable[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def run_event_enhancers(df_events: pl.DataFrame) -> pl.DataFrame:
+def enhance_event_features(df_events: pl.DataFrame) -> pl.DataFrame:
     enhancer = EventLogEnhancer(df_events)
     df_events = enhancer.normalize()
     df_events = enhancer.words()
@@ -112,14 +112,58 @@ def run_event_enhancers(df_events: pl.DataFrame) -> pl.DataFrame:
     return df_events
 
 
-def train_if(df_events: pl.DataFrame, args: argparse.Namespace):
-    numeric_cols = ["e_chars_len", "e_event_id_len", "e_words_len"]
-    item_col = "e_event_drain_id" if "e_event_drain_id" in df_events.columns else "e_words"
-    if item_col != "e_event_drain_id":
-        print("[INFO] Drain IDs unavailable; falling back to e_words for IsolationForest.")
-    sad_if = AnomalyDetector(item_list_col=item_col, numeric_cols=numeric_cols)
-    sad_if.train_df = df_events.filter(pl.col("test_case") == "correct")
-    sad_if.test_df = df_events
+def aggregate_sequence_features(df_seq: pl.DataFrame, df_events: pl.DataFrame) -> pl.DataFrame:
+    seq_enhancer = SequenceEnhancer(df=df_events, df_seq=df_seq)
+    df_seq = seq_enhancer.seq_len()
+    df_seq = seq_enhancer.start_time()
+    df_seq = seq_enhancer.duration()
+    df_seq = seq_enhancer.tokens(token="e_words")
+    df_seq = seq_enhancer.tokens(token="e_trigrams")
+    if "e_event_drain_id" in df_events.columns:
+        df_seq = seq_enhancer.events("e_event_drain_id")
+    return df_seq
+
+
+def load_sequence_dataset(root: Path) -> pl.DataFrame:
+    seq_enhanced_path = root / "lo2_sequences_enhanced.parquet"
+    seq_path = root / "lo2_sequences.parquet"
+    events_path = root / "lo2_events.parquet"
+
+    if seq_enhanced_path.exists():
+        print(f"[INFO] Lade Sequenzen inkl. Features aus {seq_enhanced_path}")
+        df_seq = pl.read_parquet(seq_enhanced_path)
+    else:
+        if not seq_path.exists():
+            raise SystemExit(
+                "Weder lo2_sequences_enhanced.parquet noch lo2_sequences.parquet gefunden. "
+                "Führe run_lo2_loader.py mit --save-parquet aus."
+            )
+        print(f"[INFO] Lade Basis-Sequenzen aus {seq_path} und berechne Features on-the-fly.")
+        df_seq = pl.read_parquet(seq_path)
+        if not events_path.exists():
+            raise SystemExit(
+                "lo2_sequences_enhanced.parquet fehlt und es gibt kein lo2_events.parquet für das Feature-Engineering. "
+                "Bitte run_lo2_loader.py mit --save-parquet (ggf. --save-events) ausführen."
+            )
+        df_events = pl.read_parquet(events_path)
+        df_events = enhance_event_features(df_events)
+        df_seq = aggregate_sequence_features(df_seq, df_events)
+
+    if df_seq.is_empty():
+        raise SystemExit("Sequenz-Tabelle ist leer – nichts zu erklären.")
+    return df_seq
+
+
+def train_if(df_seq: pl.DataFrame, args: argparse.Namespace):
+    if "e_words" not in df_seq.columns:
+        raise SystemExit("Sequenzdaten enthalten keine Spalte e_words. Führe run_lo2_loader.py erneut mit --save-parquet aus.")
+
+    item_col = "e_words"
+    numeric_candidates = ["seq_len", "duration_sec", "e_words_len", "e_trigrams_len"]
+    numeric_cols = [col for col in numeric_candidates if col in df_seq.columns]
+    sad_if = AnomalyDetector(item_list_col=item_col, numeric_cols=numeric_cols or None)
+    sad_if.train_df = df_seq.filter(pl.col("test_case") == "correct")
+    sad_if.test_df = df_seq
 
     # Optional: vorhandenes Bundle laden
     model_loaded = False
@@ -269,13 +313,17 @@ def plot_shap(explainer: ShapExplainer, out_prefix: Path) -> None:
     print(f"[INFO] SHAP Bar Plot: {bar_path}")
 
 
-def run_event_lr_shap(
-    df_events: pl.DataFrame, out_dir: Path, sample_size: int
-) -> tuple[dict, int, int]:
+def run_sequence_lr_tokens_shap(
+    df_seq: pl.DataFrame, out_dir: Path, sample_size: int
+) -> tuple[dict | None, int, int]:
+    if "e_words" not in df_seq.columns:
+        print("[INFO] e_words nicht vorhanden – LR-SHAP (Tokens) übersprungen.")
+        return None, 0, 0
+
     sad = AnomalyDetector()
     sad.item_list_col = "e_words"
-    sad.train_df = df_events
-    sad.test_df = df_events
+    sad.train_df = df_seq
+    sad.test_df = df_seq
     sad.prepare_train_test_data()
     sad.train_LR()
     _ = sad.predict()
@@ -284,21 +332,25 @@ def run_event_lr_shap(
     total = sad.X_test.shape[0]
     size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
-    save_top_features(shap_expl, 20, out_dir / "lr_top_tokens.txt")
-    plot_shap(shap_expl, out_dir / "lr_shap")
+    save_top_features(shap_expl, 20, out_dir / "seq_lr_tokens_top_features.txt")
+    plot_shap(shap_expl, out_dir / "seq_lr_tokens_shap")
     metrics = compute_metrics(sad)
-    save_json(out_dir / "metrics_lr.json", metrics)
-    print(f"[Explainability] LR SHAP samples: {size} of {total} (requested {sample_size})")
+    save_json(out_dir / "metrics_seq_lr_tokens.json", metrics)
+    print(f"[Explainability] Sequence LR (Tokens) SHAP samples: {size} of {total} (requested {sample_size})")
     return metrics, size, total
 
 
-def run_event_dt_shap(
-    df_events: pl.DataFrame, out_dir: Path, sample_size: int
-) -> tuple[dict, int, int]:
+def run_sequence_dt_shap(
+    df_seq: pl.DataFrame, out_dir: Path, sample_size: int
+) -> tuple[dict | None, int, int]:
+    if "e_trigrams" not in df_seq.columns:
+        print("[INFO] e_trigrams nicht vorhanden – Decision-Tree-SHAP übersprungen.")
+        return None, 0, 0
+
     sad = AnomalyDetector()
     sad.item_list_col = "e_trigrams"
-    sad.train_df = df_events
-    sad.test_df = df_events
+    sad.train_df = df_seq
+    sad.test_df = df_seq
     sad.prepare_train_test_data()
     sad.train_DT()
     _ = sad.predict()
@@ -307,75 +359,66 @@ def run_event_dt_shap(
     total = sad.X_test.shape[0]
     size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
-    save_top_features(shap_expl, 20, out_dir / "dt_top_trigrams.txt")
-    plot_shap(shap_expl, out_dir / "dt_shap")
+    save_top_features(shap_expl, 20, out_dir / "seq_dt_top_trigrams.txt")
+    plot_shap(shap_expl, out_dir / "seq_dt_shap")
     metrics = compute_metrics(sad)
-    save_json(out_dir / "metrics_dt.json", metrics)
-    print(f"[Explainability] DT SHAP samples: {size} of {total} (requested {sample_size})")
+    save_json(out_dir / "metrics_seq_dt.json", metrics)
+    print(f"[Explainability] Sequence DT SHAP samples: {size} of {total} (requested {sample_size})")
     return metrics, size, total
 
 
-def run_sequence_lr_shap(
-    df_events: pl.DataFrame, df_seq: pl.DataFrame | None, out_dir: Path, sample_size: int
+def run_sequence_lr_numeric_shap(
+    df_seq: pl.DataFrame, out_dir: Path, sample_size: int
 ) -> tuple[dict | None, int, int]:
-    if df_seq is None or df_seq.is_empty():
-        print("[INFO] Keine Sequenz-Parquet-Datei gefunden – Sequenz-SHAP übersprungen.")
+    required_cols = [col for col in ["seq_len", "duration_sec"] if col in df_seq.columns]
+    if not required_cols:
+        print("[INFO] Keine numerischen Sequenzfeatures (seq_len/duration_sec) vorhanden – Numeric-LR-SHAP übersprungen.")
         return None, 0, 0
 
-    seq_enhancer = SequenceEnhancer(df=df_events, df_seq=df_seq)
-    df_seq = seq_enhancer.seq_len()
-    df_seq = seq_enhancer.duration()
-    df_seq = seq_enhancer.tokens(token="e_words")
-
     sad = AnomalyDetector()
-    sad.numeric_cols = ["seq_len", "duration_sec"]
-    sad.test_train_split(df_seq, test_frac=0.90)
+    sad.numeric_cols = required_cols
+    sad.train_df = df_seq
+    sad.test_df = df_seq
     sad.prepare_train_test_data()
     sad.train_LR()
     _ = sad.predict()
 
     metrics = compute_metrics(sad)
-    save_json(out_dir / "metrics_seq_lr.json", metrics)
+    save_json(out_dir / "metrics_seq_lr_numeric.json", metrics)
 
     if sad.vec is None:
-        note_path = out_dir / "seq_lr_shap_skipped.txt"
+        note_path = out_dir / "seq_lr_numeric_shap_skipped.txt"
         write_lines(
             note_path,
             [
-                "SHAP wurde übersprungen, weil das Sequence-LR-Modell nur numerische Features (seq_len, duration_sec) nutzt",
+                "SHAP wurde übersprungen, weil das Sequence-LR-Modell nur numerische Features nutzt",
                 "und daher kein Vectorizer mit Feature-Namen vorhanden ist.",
             ],
         )
-        print(f"[INFO] Sequence-SHAP übersprungen (nur numerische Features); Hinweis unter {note_path}")
+        print(f"[INFO] Sequence-LR (numeric) SHAP übersprungen; Hinweis unter {note_path}")
         return metrics, 0, sad.X_test.shape[0]
 
     shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
     total = sad.X_test.shape[0]
     size = total if sample_size <= 0 else min(sample_size, total)
     shap_expl.calc_shapvalues(custom_slice=slice(0, size))
-    save_top_features(shap_expl, 20, out_dir / "seq_lr_top_features.txt")
-    plot_shap(shap_expl, out_dir / "seq_lr_shap")
-    print(f"[Explainability] Sequence LR SHAP samples: {size} of {total} (requested {sample_size})")
+    save_top_features(shap_expl, 20, out_dir / "seq_lr_numeric_top_features.txt")
+    plot_shap(shap_expl, out_dir / "seq_lr_numeric_shap")
+    print(f"[Explainability] Sequence LR (numeric) SHAP samples: {size} of {total} (requested {sample_size})")
     return metrics, size, total
 
 
 def main() -> None:
     args = parse_args()
     root = args.root.resolve()
-    events_path = root / "lo2_events.parquet"
-    seq_path = root / "lo2_sequences.parquet"
-    if not events_path.exists():
-        raise SystemExit(f"lo2_events.parquet nicht gefunden unter {events_path}")
-
     out_dir = ensure_dir(root / "explainability")
     print(f"[INFO] Artefakte werden unter {out_dir} abgelegt.")
 
-    print("[INFO] Lade Events …")
-    df_events = pl.read_parquet(events_path)
-    df_events = run_event_enhancers(df_events)
+    print("[INFO] Lade Sequenzen …")
+    df_seq = load_sequence_dataset(root)
 
     print("[INFO] Trainiere IsolationForest (Phase D Setting)…")
-    sad_if, pred_if = train_if(df_events, args)
+    sad_if, pred_if = train_if(df_seq, args)
     pred_if_path = out_dir / "lo2_if_predictions.parquet"
     pred_if.write_parquet(pred_if_path)
     print(f"[INFO] IF-Predictions gespeichert: {pred_if_path}")
@@ -389,25 +432,30 @@ def main() -> None:
         normal_sample=args.nn_normal_sample,
     )
 
-    print("[INFO] Berechne SHAP für Logistic Regression …")
-    lr_metrics, lr_shap_used, lr_total = run_event_lr_shap(df_events, out_dir, args.shap_sample)
-    print(f"[INFO] LR-Metriken: {lr_metrics}")
+    print("[INFO] Berechne SHAP für Sequence-LR (Tokens) …")
+    lr_metrics, lr_shap_used, lr_total = run_sequence_lr_tokens_shap(df_seq, out_dir, args.shap_sample)
+    if lr_metrics:
+        print(f"[INFO] Sequence-LR (Tokens) Metriken: {lr_metrics}")
 
-    print("[INFO] Berechne SHAP für Decision Tree …")
-    dt_metrics, dt_shap_used, dt_total = run_event_dt_shap(df_events, out_dir, args.shap_sample)
-    print(f"[INFO] DT-Metriken: {dt_metrics}")
+    print("[INFO] Berechne SHAP für Sequence-Decision-Tree …")
+    dt_metrics, dt_shap_used, dt_total = run_sequence_dt_shap(df_seq, out_dir, args.shap_sample)
+    if dt_metrics:
+        print(f"[INFO] Sequence-DT Metriken: {dt_metrics}")
 
-    df_seq = pl.read_parquet(seq_path) if seq_path.exists() else None
-    seq_metrics, seq_shap_used, seq_total = run_sequence_lr_shap(df_events, df_seq, out_dir, args.shap_sample)
-    if seq_metrics:
-        print(f"[INFO] Sequence-LR-Metriken: {seq_metrics}")
+    seq_num_metrics, seq_num_shap_used, seq_num_total = run_sequence_lr_numeric_shap(
+        df_seq, out_dir, args.shap_sample
+    )
+    if seq_num_metrics:
+        print(f"[INFO] Sequence-LR (numeric) Metriken: {seq_num_metrics}")
 
     total_anomalies = pred_if.filter(pl.col("pred_ano") == 1).height
     total_normals = pred_if.filter(pl.col("pred_ano") == 0).height
     downsampling_performed = False
-    if (lr_total and lr_shap_used < lr_total) or (dt_total and dt_shap_used < dt_total):
+    if lr_total and lr_shap_used < lr_total:
         downsampling_performed = True
-    if seq_total and seq_shap_used < seq_total:
+    if dt_total and dt_shap_used < dt_total:
+        downsampling_performed = True
+    if seq_num_total and seq_num_shap_used < seq_num_total:
         downsampling_performed = True
     if nn_top_used and nn_top_used < total_anomalies:
         downsampling_performed = True
@@ -415,10 +463,9 @@ def main() -> None:
         downsampling_performed = True
 
     print("\n[Summary] Explainability diagnostics:")
-    print(
-        f"  lr_shap_samples={lr_shap_used} total={lr_total} | dt_shap_samples={dt_shap_used} total={dt_total}"
-    )
-    print(f"  seq_shap_samples={seq_shap_used} total={seq_total}")
+    print(f"  seq_lr_tokens_shap_samples={lr_shap_used} total={lr_total}")
+    print(f"  seq_dt_shap_samples={dt_shap_used} total={dt_total}")
+    print(f"  seq_lr_numeric_shap_samples={seq_num_shap_used} total={seq_num_total}")
     print(
         f"  nn_top_used={nn_top_used} of {total_anomalies} anomalies | nn_normals_used={nn_normal_used} of {total_normals}"
     )

@@ -11,24 +11,24 @@ Die LO2-Pipeline bringt eine deklarative Modell-Registry mit 14 Einträgen. Übe
 ## Kategorien
 
 - **Baseline:** IsolationForest (`Phase D`), immer aktiv.
-- **Supervised (Event):** LogisticRegression, LinearSVM, DecisionTree, RandomForest, XGBoost.
-- **Un-/Semi-Supervised (Event):** LOF, OneClassSVM, KMeans, RarityModel, OOVDetector.
-- **Sequence:** LogisticRegression auf numerischen bzw. tokenbasierten Features, inkl. SHAP-Variante.
+- **Supervised (Sequence):** LogisticRegression, LinearSVM, DecisionTree, RandomForest, XGBoost.
+- **Un-/Semi-Supervised (Sequence):** LOF, OneClassSVM, KMeans, RarityModel, OOVDetector.
+- **Sequence (numeric/token):** LogisticRegression auf numerischen bzw. tokenbasierten Features, inkl. SHAP-Variante.
 
 ## Vergleichstabelle
 
 | Schlüssel | Ebene | Eingangsdaten | Stärken | Stolpersteine |
 | --- | --- | --- | --- | --- |
-| `event_lr_words` | Event | Tokens (`e_words`) | Solide Baseline, interpretierbar | Braucht Labels, kein automatischer Split |
-| `event_lsvm_words` | Event | Tokens | Robuste Trennschärfe | Keine Wahrscheinlichkeiten, ggf. langsam |
-| `event_dt_trigrams` | Event | Trigramme | Decision Paths verständlich | Overfitting bei vollem Datensatz |
-| `event_rf_words` | Event | Tokens | Ensemble-robust | Höherer Speicherbedarf |
-| `event_xgb_words` | Event | Tokens | Flexible Hyperparameter | Längere Trainingszeit |
-| `event_lof_words` | Event | Tokens (correct-only) | Lokaler Outlier-Fokus | Sensibel für Skalierung |
-| `event_oneclass_svm_words` | Event | Tokens (correct-only) | Präziser Normalraum | Konvergenzprobleme möglich |
-| `event_kmeans_words` | Event | Tokens | Schnelle Clusterbildung | Keine Wahrscheinlichkeiten |
-| `event_rarity_words` | Event | Tokenstatistik | Ohne Training nutzbar | Kaum Schwellenlogik |
-| `event_oov_words` | Event | Tokens + Längen | Findet unbekannte Tokens | Vokabulargröße abstimmen |
+| `event_lr_words` | Sequence | Tokens (`e_words`) | Solide Baseline, interpretierbar | Braucht Labels, kein automatischer Split |
+| `event_lsvm_words` | Sequence | Tokens | Robuste Trennschärfe | Keine Wahrscheinlichkeiten, ggf. langsam |
+| `event_dt_trigrams` | Sequence | Trigramme | Decision Paths verständlich | Overfitting bei vollem Datensatz |
+| `event_rf_words` | Sequence | Tokens | Ensemble-robust | Höherer Speicherbedarf |
+| `event_xgb_words` | Sequence | Tokens | Flexible Hyperparameter | Längere Trainingszeit |
+| `event_lof_words` | Sequence | Tokens (correct-only) | Lokaler Outlier-Fokus | Sensibel für Skalierung |
+| `event_oneclass_svm_words` | Sequence | Tokens (correct-only) | Präziser Normalraum | Konvergenzprobleme möglich |
+| `event_kmeans_words` | Sequence | Tokens | Schnelle Clusterbildung | Keine Wahrscheinlichkeiten |
+| `event_rarity_words` | Sequence | Tokenstatistik | Ohne Training nutzbar | Kaum Schwellenlogik |
+| `event_oov_words` | Sequence | Tokens + Längen | Findet unbekannte Tokens | Vokabulargröße abstimmen |
 | `sequence_lr_numeric` | Sequence | `seq_len`, `duration`, numerische Features | Schnell, robust | Verzichtet auf Tokenkontext |
 | `sequence_lr_words` | Sequence | Tokenbuckets pro Sequenz | Erfasst Sequenzmuster | Größere Matrizen |
 | `sequence_shap_lr_words` | Sequence | Tokenbuckets | SHAP-Erklärungen | Rechenintensiv |
@@ -62,5 +62,5 @@ python demo/lo2_e2e/LO2_samples.py \
 
 ## Offene Punkte
 
-- TODO: Einheitlichen Train/Test-Split definieren, damit Metriken vergleichbar werden.
+- TODO: Train/Test-Reporting vereinheitlichen (unsupervised Modelle laufen weiterhin auf Volltraining).
 - TODO: Dokumentieren, welche Modelle zusätzliche Python-Pakete benötigen (z. B. XGBoost).

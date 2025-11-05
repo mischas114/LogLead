@@ -35,48 +35,48 @@ DEFAULT_SUPERVISED_MODELS: List[str] = [
 
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "event_lr_words": {
-        "description": "LogisticRegression auf Event-Worttokens (Bag-of-Words).",
-        "level": "event",
+        "description": "LogisticRegression auf Sequenz-Worttokens (Bag-of-Words).",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_LR",
         "stat_label": "event_lr_words",
     },
     "event_dt_trigrams": {
-        "description": "DecisionTree auf Event-Trigrams.",
-        "level": "event",
+        "description": "DecisionTree auf Sequenz-Trigrams.",
+        "level": "sequence",
         "item_list_col": "e_trigrams",
         "numeric_cols": [],
         "train_method": "train_DT",
         "stat_label": "event_dt_trigrams",
     },
     "event_lsvm_words": {
-        "description": "LinearSVM auf Event-Worttokens.",
-        "level": "event",
+        "description": "LinearSVM auf Sequenz-Worttokens.",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_LSVM",
         "stat_label": "event_lsvm_words",
     },
     "event_rf_words": {
-        "description": "RandomForest auf Event-Worttokens.",
-        "level": "event",
+        "description": "RandomForest auf Sequenz-Worttokens.",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_RF",
         "stat_label": "event_rf_words",
     },
     "event_xgb_words": {
-        "description": "XGBoost Klassifikator auf Event-Worttokens.",
-        "level": "event",
+        "description": "XGBoost Klassifikator auf Sequenz-Worttokens.",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_XGB",
         "stat_label": "event_xgb_words",
     },
     "event_lof_words": {
-        "description": "LocalOutlierFactor (novelty) auf Event-Worttokens (trainiert nur auf korrekten Runs).",
-        "level": "event",
+        "description": "LocalOutlierFactor (novelty) auf Sequenz-Worttokens (trainiert nur auf korrekten Runs).",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_LOF",
@@ -85,16 +85,16 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "stat_label": "event_lof_words",
     },
     "event_kmeans_words": {
-        "description": "KMeans Clustering auf Event-Worttokens (2 Cluster).",
-        "level": "event",
+        "description": "KMeans Clustering auf Sequenz-Worttokens (2 Cluster).",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_KMeans",
         "stat_label": "event_kmeans_words",
     },
     "event_oneclass_svm_words": {
-        "description": "OneClassSVM auf Event-Worttokens (trainiert nur auf korrekten Runs).",
-        "level": "event",
+        "description": "OneClassSVM auf Sequenz-Worttokens (trainiert nur auf korrekten Runs).",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_OneClassSVM",
@@ -102,16 +102,16 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "stat_label": "event_oneclass_svm_words",
     },
     "event_rarity_words": {
-        "description": "RarityModel auf Event-Worttokens.",
-        "level": "event",
+        "description": "RarityModel auf Sequenz-Worttokens.",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_RarityModel",
         "stat_label": "event_rarity_words",
     },
     "event_oov_words": {
-        "description": "OOVDetector für seltene Tokens (trainiert nur auf korrekten Runs).",
-        "level": "event",
+        "description": "OOVDetector für seltene Sequenz-Tokens (trainiert nur auf korrekten Runs).",
+        "level": "sequence",
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_OOVDetector",
@@ -149,6 +149,193 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _infer_time_column(df: pl.DataFrame) -> str | None:
+    """Return the most specific timestamp column available for temporal ordering."""
+    for candidate in ("start_time", "m_timestamp", "event_time", "timestamp"):
+        if candidate in df.columns:
+            return candidate
+    return None
+
+
+def _run_based_holdout_split(
+    df: pl.DataFrame,
+    fraction: float,
+    *,
+    shuffle: bool = False,
+    min_per_bucket: int = 1,
+    rng_seed: int | None = None,
+) -> tuple[pl.DataFrame, pl.DataFrame | None, dict[str, Any]]:
+    """
+    Split a DataFrame into train/hold-out partitions based on run groupings.
+
+    Groups are formed on (service, run, test_case) when present to avoid leakage between
+    services or label strata. The newest groups per bucket (based on timestamps) are
+    reserved for hold-out evaluation unless ``shuffle`` is requested.
+    """
+    meta: dict[str, Any] = {
+        "applied": False,
+        "reason": "",
+        "total_groups": 0,
+        "holdout_groups": 0,
+        "train_groups": 0,
+        "holdout_rows": 0,
+        "train_rows": df.height,
+    }
+    if fraction <= 0:
+        meta["reason"] = "Hold-out deaktiviert (Bruchteil ≤ 0)."
+        return df, None, meta
+    if df.is_empty():
+        meta["reason"] = "Dataset leer."
+        return df, None, meta
+    if "run" not in df.columns:
+        if fraction <= 0:
+            meta["reason"] = "Spalte 'run' fehlt und Hold-out deaktiviert."
+            return df, None, meta
+        fallback_key = None
+        for candidate in ("seq_id", "id"):
+            if candidate in df.columns:
+                fallback_key = candidate
+                break
+        if fallback_key is None:
+            meta["reason"] = "Spalte 'run' fehlt und kein eindeutiger Schlüssel vorhanden."
+            return df, None, meta
+
+        df_indexed = df.with_row_count("__row_id")
+        rng = random.Random(rng_seed)
+        holdout_ids: list[int] = []
+
+        if "anomaly" in df.columns:
+            anomaly_values = df["anomaly"].unique().to_list()
+            for value in anomaly_values:
+                group = df_indexed.filter(pl.col("anomaly") == value)
+                group_ids = group["__row_id"].to_list()
+                if len(group_ids) <= 1:
+                    continue
+                if shuffle:
+                    rng.shuffle(group_ids)
+                else:
+                    group_ids.sort()
+                group_holdout = max(1, int(len(group_ids) * fraction))
+                if group_holdout >= len(group_ids):
+                    group_holdout = len(group_ids) - 1
+                if group_holdout > 0:
+                    holdout_ids.extend(group_ids[-group_holdout:])
+
+        if not holdout_ids:
+            all_ids = df_indexed["__row_id"].to_list()
+            if len(all_ids) <= 1:
+                meta["reason"] = "Dataset zu klein für Hold-out ohne 'run'."
+                return df, None, meta
+            if shuffle:
+                rng.shuffle(all_ids)
+            else:
+                all_ids.sort()
+            fallback_holdout = max(1, int(len(all_ids) * fraction))
+            if fallback_holdout >= len(all_ids):
+                fallback_holdout = len(all_ids) - 1
+            holdout_ids = all_ids[-fallback_holdout:]
+
+        holdout_df = df_indexed.filter(pl.col("__row_id").is_in(holdout_ids)).drop("__row_id")
+        train_df = df_indexed.filter(~pl.col("__row_id").is_in(holdout_ids)).drop("__row_id")
+        if holdout_df.is_empty() or train_df.is_empty():
+            meta["reason"] = "Fallback-Hold-out ohne 'run' führte zu leerem Split."
+            return df, None, meta
+
+        meta.update(
+            {
+                "applied": True,
+                "reason": "Fallback-Hold-out ohne 'run' genutzt.",
+                "holdout_groups": 1,
+                "train_groups": 1,
+                "holdout_rows": holdout_df.height,
+                "train_rows": train_df.height,
+            }
+        )
+        return train_df, holdout_df, meta
+
+    fraction = max(0.0, min(float(fraction), 0.5))
+    min_per_bucket = max(1, int(min_per_bucket))
+
+    group_cols: list[str] = []
+    if "service" in df.columns:
+        group_cols.append("service")
+    group_cols.append("run")
+    if "test_case" in df.columns:
+        group_cols.append("test_case")
+
+    time_col = _infer_time_column(df)
+    if time_col:
+        group_meta = df.group_by(group_cols).agg(pl.col(time_col).min().alias("_first_ts"))
+    else:
+        group_meta = df.group_by(group_cols).agg(pl.len().alias("_group_size"))
+    meta_rows = group_meta.to_dicts()
+    total_groups = len(meta_rows)
+    meta["total_groups"] = total_groups
+    if total_groups <= 1:
+        meta["reason"] = "Nur eine Gruppe vorhanden."
+        return df, None, meta
+
+    bucket_cols = [col for col in group_cols if col != "run"]
+    if not bucket_cols:
+        bucket_cols = ["__ALL__"]
+
+    rng = random.Random(rng_seed)
+    buckets: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in meta_rows:
+        bucket_key = (
+            tuple(row[col] for col in bucket_cols)
+            if bucket_cols != ["__ALL__"]
+            else ("__ALL__",)
+        )
+        buckets.setdefault(bucket_key, []).append(row)
+
+    holdout_groups: list[dict[str, Any]] = []
+    train_groups: list[dict[str, Any]] = []
+    for rows in buckets.values():
+        if shuffle:
+            rng.shuffle(rows)
+        else:
+            if time_col and "_first_ts" in rows[0]:
+                rows.sort(key=lambda item: (item.get("_first_ts"), item["run"]))
+            else:
+                rows.sort(key=lambda item: item["run"])
+        if len(rows) <= 1:
+            train_groups.extend(rows)
+            continue
+        holdout_size = max(min_per_bucket, int(len(rows) * fraction))
+        if holdout_size >= len(rows):
+            holdout_size = len(rows) - 1
+        if holdout_size <= 0:
+            train_groups.extend(rows)
+            continue
+        train_groups.extend(rows[:-holdout_size])
+        holdout_groups.extend(rows[-holdout_size:])
+
+    if not holdout_groups:
+        meta["reason"] = "Zu wenige Gruppen für Hold-out."
+        return df, None, meta
+
+    key_cols = [col for col in group_cols]
+    holdout_key_dicts = [{col: row[col] for col in key_cols} for row in holdout_groups]
+    holdout_key_df = pl.DataFrame(holdout_key_dicts)
+    holdout_df = df.join(holdout_key_df, on=key_cols, how="inner")
+    train_df = df.join(holdout_key_df, on=key_cols, how="anti")
+    if holdout_df.is_empty() or train_df.is_empty():
+        meta["reason"] = "Hold-out würde Training oder Test entleeren."
+        return df, None, meta
+
+    meta.update(
+        {
+            "applied": True,
+            "holdout_groups": len(holdout_groups),
+            "train_groups": len(train_groups),
+            "holdout_rows": holdout_df.height,
+            "train_rows": train_df.height,
+        }
+    )
+    return train_df, holdout_df, meta
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run LO2 enhancement pipeline with optional anomaly detection phases."
@@ -166,6 +353,23 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for sampling enhanced records and optional down-sampling.",
     )
     parser.add_argument(
+        "--sup-holdout-fraction",
+        type=float,
+        default=0.2,
+        help="Anteil der Run-Gruppen (pro Service/Test-Case), die für supervised Modelle als Hold-out reserviert werden. 0 deaktiviert den Split.",
+    )
+    parser.add_argument(
+        "--sup-holdout-min-groups",
+        type=int,
+        default=1,
+        help="Mindestanzahl von Gruppen pro Bucket, die in den Hold-out fallen dürfen (gesetzt auf ≥1).",
+    )
+    parser.add_argument(
+        "--sup-holdout-shuffle",
+        action="store_true",
+        help="Wählt Hold-out-Gruppen zufällig (statt zeitbasierter Auswahl). Nutzt --sample-seed.",
+    )
+    parser.add_argument(
         "--if-contamination",
         type=float,
         default=0.1,
@@ -181,6 +385,11 @@ def parse_args() -> argparse.Namespace:
         "--if-max-samples",
         default="auto",
         help="max_samples für IsolationForest (Ganzzahl oder 'auto').",
+    )
+    parser.add_argument(
+        "--skip-if",
+        action="store_true",
+        help="Überspringt den IsolationForest-Baseline-Schritt (Phase D).",
     )
     parser.add_argument(
         "--if-item",
@@ -201,7 +410,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-enhancers",
         action="store_true",
-        help="Persist enhanced event/sequence tables to Parquet files.",
+        help="Persist the enhanced sequence table to Parquet.",
     )
     parser.add_argument(
         "--enhancers-output-dir",
@@ -235,7 +444,7 @@ def parse_args() -> argparse.Namespace:
         "--if-holdout-fraction",
         type=float,
         default=0.0,
-        help="Optional fraction (0-0.5) of 'correct' events reserved as temporal hold-out.",
+        help="Optional fraction (0-0.5) of 'correct' sequences reserved as temporal hold-out.",
     )
     parser.add_argument(
         "--if-threshold-percentile",
@@ -346,64 +555,79 @@ def main() -> None:
     loader_output = (script_dir / "../result/lo2").resolve()
     events_path = loader_output / "lo2_events.parquet"
     seq_path = loader_output / "lo2_sequences.parquet"
+    seq_enhanced_path = loader_output / "lo2_sequences_enhanced.parquet"
 
-    if not events_path.exists():
-        raise SystemExit(
-            "Missing Parquet export. Run run_lo2_loader.py with --save-parquet before executing this script."
-        )
+    df_events: pl.DataFrame | None = None
+    sequences_enhanced = False
 
-    print(f"Reading LO2 events from {events_path}")
-    df_events = pl.read_parquet(events_path)
-    print(f"Number of LO2 events: {len(df_events)}")
-    if "anomaly" in df_events.columns:
-        event_ano = int(df_events["anomaly"].sum())
-        print(f"Event anomalies: {event_ano} ({event_ano / max(len(df_events), 1) * 100:.2f}%)")
-
-    # Optional sequence-level table.
-    df_seqs = None
-    if seq_path.exists():
-        print(f"Reading LO2 sequences from {seq_path}")
-        df_seqs = pl.read_parquet(seq_path)
-        if len(df_seqs):
-            seq_ano = int(df_seqs["anomaly"].sum()) if "anomaly" in df_seqs.columns else 0
-            print(f"Sequence anomalies: {seq_ano} ({seq_ano / max(len(df_seqs), 1) * 100:.2f}%)")
+    if seq_enhanced_path.exists():
+        print(f"Reading enhanced LO2 sequences from {seq_enhanced_path}")
+        df_seqs = pl.read_parquet(seq_enhanced_path)
+        sequences_enhanced = True
     else:
-        print("No lo2_sequences.parquet found; continuing with event-only workflow.")
+        if not seq_path.exists():
+            raise SystemExit(
+                "Missing sequence export. Run run_lo2_loader.py with --save-parquet to generate "
+                "lo2_sequences_enhanced.parquet."
+            )
+        print(f"Reading base LO2 sequences from {seq_path}")
+        df_seqs = pl.read_parquet(seq_path)
+        if events_path.exists():
+            print(f"Reading LO2 events from {events_path} for enhancement")
+            df_events = pl.read_parquet(events_path)
+        else:
+            raise SystemExit(
+                "Sequences need enhancement (words/trigrams), but no enhanced parquet or event table found. "
+                "Re-run run_lo2_loader.py with --save-parquet so that lo2_sequences_enhanced.parquet is created; "
+                "if necessary add --save-events (and optionally --save-base-sequences)."
+            )
+
+    if df_seqs.is_empty():
+        raise SystemExit("Sequence table is empty; cannot continue with sequence-based pipeline.")
+
+    seq_ano = int(df_seqs["anomaly"].sum()) if "anomaly" in df_seqs.columns else 0
+    print(f"Sequence anomalies: {seq_ano} ({seq_ano / max(len(df_seqs), 1) * 100:.2f}%)")
 
     downsampling_performed = False
-    train_stats: list[tuple[str, int, int]] = []
+    train_stats: list[dict[str, Any]] = []
 
-    print("\nEnhancing events (normalization, tokens, parsers, lengths)...")
-    enhancer = EventLogEnhancer(df_events)
-    df_events = enhancer.normalize()
-    df_events = enhancer.words()
-    df_events = enhancer.trigrams()
-    try:
-        df_events = enhancer.parse_drain()
-    except Exception as exc:  # drain parser can fail if templates missing
-        print(f"Drain parsing skipped: {exc}")
+    if not sequences_enhanced:
+        print("\nEnhancing events (normalization, tokens, parsers, lengths)...")
+        enhancer = EventLogEnhancer(df_events)
+        df_events = enhancer.normalize()
+        df_events = enhancer.words()
+        df_events = enhancer.trigrams()
+        try:
+            df_events = enhancer.parse_drain()
+        except Exception as exc:  # drain parser can fail if templates missing
+            print(f"Drain parsing skipped: {exc}")
 
-    df_events = enhancer.length()
+        df_events = enhancer.length()
 
-    random.seed(args.sample_seed)
-    rand_idx = random.randint(0, len(df_events) - 1)
-    print("\nSample enhanced record:")
-    print(f"Original:  {df_events['m_message'][rand_idx]}")
-    if "e_message_normalized" in df_events.columns:
-        print(f"Normalized: {df_events['e_message_normalized'][rand_idx]}")
-    print(f"Words:     {df_events['e_words'][rand_idx]}")
-    print(f"Trigrams:  {df_events['e_trigrams'][rand_idx]}")
-    if "e_event_drain_id" in df_events.columns:
-        print(f"Drain ID: {df_events['e_event_drain_id'][rand_idx]}")
-    print(f"Len chars: {df_events['e_chars_len'][rand_idx]}")
-
-    if df_seqs is not None and len(df_seqs):
         print("\nAggregating to sequence level...")
         seq_enhancer = SequenceEnhancer(df=df_events, df_seq=df_seqs)
         df_seqs = seq_enhancer.seq_len()
+        df_seqs = seq_enhancer.start_time()
         df_seqs = seq_enhancer.duration()
         df_seqs = seq_enhancer.tokens(token="e_words")
         df_seqs = seq_enhancer.tokens(token="e_trigrams")
+        if "e_event_drain_id" in df_events.columns:
+            df_seqs = seq_enhancer.events("e_event_drain_id")
+        df_events = None
+
+    random.seed(args.sample_seed)
+    sample_seq = df_seqs.sample(n=1, seed=args.sample_seed)
+    sample_dict = sample_seq.to_dicts()[0]
+    words = sample_dict.get("e_words") or []
+    trigrams = sample_dict.get("e_trigrams") or []
+    print("\nSample sequence (post-enhancement):")
+    print(
+        f"Seq ID: {sample_dict.get('seq_id')} | service: {sample_dict.get('service')} | "
+        f"test_case: {sample_dict.get('test_case')}"
+    )
+    print(f"Length: seq_len={sample_dict.get('seq_len')} duration_sec={sample_dict.get('duration_sec')}")
+    print(f"Words[{len(words)}]: {words[:10]}")
+    print(f"Trigrams[{len(trigrams)}]: {trigrams[:10]}")
 
     if args.save_enhancers:
         enhancer_dir = args.enhancers_output_dir
@@ -411,240 +635,248 @@ def main() -> None:
             enhancer_dir = (orig_cwd / enhancer_dir).resolve()
         enhancer_dir.mkdir(parents=True, exist_ok=True)
 
-        events_out = enhancer_dir / "lo2_events_enhanced.parquet"
-        if events_out.exists() and not args.overwrite_enhancers:
+        seqs_out = enhancer_dir / "lo2_sequences_enhanced.parquet"
+        if seqs_out.exists() and not args.overwrite_enhancers:
             raise SystemExit(
-                f"Enhanced events already exist at {events_out}. Use --overwrite-enhancers to replace them."
+                f"Enhanced sequences already exist at {seqs_out}. Use --overwrite-enhancers to replace them."
             )
-        df_events.write_parquet(events_out)
-        print(f"Enhanced events gespeichert unter {events_out}")
-
-        if df_seqs is not None and len(df_seqs):
-            seqs_out = enhancer_dir / "lo2_sequences_enhanced.parquet"
-            if seqs_out.exists() and not args.overwrite_enhancers:
-                raise SystemExit(
-                    f"Enhanced sequences already exist at {seqs_out}. Use --overwrite-enhancers to replace them."
-                )
-            df_seqs.write_parquet(seqs_out)
-            print(f"Enhanced sequences gespeichert unter {seqs_out}")
+        df_seqs.write_parquet(seqs_out)
+        print(f"Enhanced sequences gespeichert unter {seqs_out}")
 
     if args.phase == "enhancers":
         print("\nEnhancer phase complete. Skipping anomaly detection and explainability.")
         return
 
-    # Isolation Forest baseline (Phase D)
-    print("\nTraining/Loading Isolation Forest on event words (Phase D)")
-    numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
-    sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
-    # IsolationForest learns only from normal runs; keep anomalies in test_df for evaluation.
-    correct_events = df_events.filter(pl.col("test_case") == "correct")
-    holdout_fraction = min(max(args.if_holdout_fraction, 0.0), 0.5)
-    holdout_df = None
-    if holdout_fraction > 0 and correct_events.height > 1:
-        if "m_timestamp" in correct_events.columns:
-            sorted_correct = correct_events.sort("m_timestamp")
+    run_if_phase = args.phase in ("if", "full") and not args.skip_if
+    if run_if_phase:
+        print("\nTraining/Loading Isolation Forest on sequence tokens (Phase D)")
+        numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
+        sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
+        # IsolationForest learns only from normal runs; keep anomalies in test_df for evaluation.
+        if "test_case" in df_seqs.columns:
+            correct_sequences = df_seqs.filter(pl.col("test_case") == "correct")
         else:
-            sorted_correct = correct_events.sort("seq_id")
-        holdout_size = max(1, int(sorted_correct.height * holdout_fraction))
-        if holdout_size >= sorted_correct.height:
-            holdout_size = sorted_correct.height - 1
-        if holdout_size > 0:
-            holdout_df = sorted_correct.tail(holdout_size)
-            correct_events = sorted_correct.head(sorted_correct.height - holdout_size)
-            print(
-                f"Using temporal hold-out: {holdout_size} events reserved ({holdout_fraction * 100:.2f}% of correct runs)."
-            )
-            downsampling_performed = True
-    sad_if.train_df = correct_events
-    sad_if.test_df = df_events
-
-    # Try loading an existing bundle if provided
-    model_loaded = False
-    if args.load_model is not None:
-        load_path = args.load_model
-        if not load_path.is_absolute():
-            load_path = (orig_cwd / load_path).resolve()
-        if load_path.exists():
-            try:
-                loaded = joblib.load(load_path)
-                # Support both tuple and dict-style bundles
-                if isinstance(loaded, tuple) and len(loaded) == 2:
-                    model, vec = loaded
-                elif isinstance(loaded, dict):
-                    model = loaded.get("model")
-                    vec = loaded.get("vectorizer") or loaded.get("vec")
-                else:
-                    raise ValueError("Unrecognized model bundle format")
-                sad_if.model = model
-                sad_if.vec = vec
-                model_loaded = True
-                print(f"Loaded existing IF model bundle from {load_path}")
-            except Exception as exc:
-                print(f"[WARN] Could not load model bundle from {load_path}: {exc}. Will train a new model.")
-        else:
-            print(f"[INFO] No existing model found at {load_path}; training a new model.")
-
-    # Prepare features (reuses existing vectorizer if present)
-    sad_if.prepare_train_test_data()
-
-    max_samples = args.if_max_samples
-    if isinstance(max_samples, str) and max_samples != "auto":
-        if max_samples.isdigit():
-            max_samples = int(max_samples)
-        else:
-            raise SystemExit("--if-max-samples muss 'auto' oder eine Ganzzahl sein.")
-
-    if not model_loaded:
-        sad_if.train_IsolationForest(
-            filter_anos=True,
-            n_estimators=args.if_n_estimators,
-            contamination=args.if_contamination,
-            max_samples=max_samples,
-        )
-    pred_if = sad_if.predict()
-
-    # Add raw anomaly scores and dense ranking for inspection.
-    score_if = (-sad_if.model.score_samples(sad_if.X_test)).tolist()
-    pred_if = pred_if.with_columns(
-        pl.Series(name="score_if", values=score_if)
-    ).with_columns(
-        pl.col("score_if").rank("dense", descending=True).alias("rank_if")
-    )
-    print("Top 5 IF-Runs (höchster Score zuerst):")
-    print(pred_if.sort("score_if", descending=True).head(5))
-
-    train_scores = (-sad_if.model.score_samples(sad_if.X_train_no_anos)).tolist()
-    holdout_scores = None
-    if holdout_df is not None:
-        holdout_matrix = _transform_with_detector(sad_if, holdout_df)
-        if holdout_matrix is not None:
-            holdout_scores = (-sad_if.model.score_samples(holdout_matrix)).tolist()
-
-    threshold_value = None
-    threshold_percentile = None
-    if args.if_threshold_percentile is not None:
-        percentile = args.if_threshold_percentile
-        if percentile <= 1:
-            percentile *= 100
-        percentile = max(0.0, min(percentile, 100.0))
-        source_scores = holdout_scores or train_scores
-        if source_scores:
-            threshold_value = float(np.percentile(source_scores, percentile))
-            threshold_percentile = percentile / 100.0
-            print(
-                f"Derived IF score threshold: {threshold_value:.6f} (percentile {percentile:.2f})"
-            )
-        else:
-            print("Threshold percentile requested, but no scores available to calibrate.")
-
-    if threshold_value is not None:
-        pred_if = pred_if.with_columns(
-            (pl.col("score_if") >= threshold_value).alias("pred_if_threshold")
-        )
-
-    save_if_path = args.save_if
-    if not save_if_path.is_absolute():
-        save_if_path = (orig_cwd / save_if_path).resolve()
-    save_if_path.parent.mkdir(parents=True, exist_ok=True)
-    if save_if_path.suffix == ".csv":
-        pred_if.write_csv(save_if_path)
-    else:
-        pred_if.write_parquet(save_if_path)
-    print(f"IsolationForest-Ergebnis gespeichert unter {save_if_path}")
-
-    metrics_results = {}
-    if threshold_value is not None:
-        metrics_results["threshold_value"] = threshold_value
-        metrics_results["threshold_percentile"] = threshold_percentile
-    if args.report_precision_at:
-        precision_val = precision_at_k(pred_if, args.report_precision_at)
-        if precision_val is not None:
-            metrics_results[f"precision_at_{args.report_precision_at}"] = precision_val
-        else:
-            print("Precision@k requested, but insufficient data to compute.")
-
-    if args.report_fp_alpha:
-        fp_val = false_positive_rate_at_alpha(pred_if, args.report_fp_alpha)
-        if fp_val is not None:
-            metrics_results[f"fp_rate_at_{args.report_fp_alpha}"] = fp_val
-        else:
-            print("FP-rate@alpha requested, but insufficient data to compute.")
-
-    if args.report_psi:
-        if holdout_scores:
-            psi_val = population_stability_index(train_scores, holdout_scores)
-            if psi_val is not None:
-                metrics_results["psi_train_vs_holdout"] = psi_val
-        else:
-            print("PSI requested, but hold-out scores are unavailable.")
-
-    if metrics_results:
-        metrics_dir = args.metrics_dir
-        if not metrics_dir.is_absolute():
-            metrics_dir = (orig_cwd / metrics_dir).resolve()
-        metrics_dir.mkdir(parents=True, exist_ok=True)
-        metrics_json = metrics_dir / "if_metrics.json"
-        metrics_csv = metrics_dir / "if_metrics.csv"
-        with metrics_json.open("w", encoding="utf-8") as fh:
-            json.dump(metrics_results, fh, indent=2)
-        with metrics_csv.open("w", encoding="utf-8", newline="") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["metric", "value"])
-            for key, value in metrics_results.items():
-                writer.writerow([key, value])
-        print(f"IF metrics gespeichert unter {metrics_json} und {metrics_csv}")
-
-    if args.save_model:
-        model_path = args.save_model
-        if not model_path.is_absolute():
-            model_path = (orig_cwd / model_path).resolve()
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        if model_path.exists() and not args.overwrite_model:
-            raise SystemExit(
-                f"Modelldatei existiert bereits unter {model_path}. Verwende --overwrite-model, um sie zu ersetzen."
-            )
-        joblib.dump((sad_if.model, sad_if.vec), model_path)
-        print(f"IsolationForest-Modell + Vectorizer gespeichert unter {model_path}")
-
-        if args.dump_metadata:
-            metadata = {
-                "generated_at": datetime.utcnow().isoformat() + "Z",
-                "training_rows": sad_if.train_df.height if sad_if.train_df is not None else 0,
-                "holdout_rows": holdout_df.height if holdout_df is not None else 0,
-                "if_params": {
-                    "item_list_col": args.if_item,
-                    "numeric_cols": numeric_cols,
-                    "contamination": args.if_contamination,
-                    "n_estimators": args.if_n_estimators,
-                    "max_samples": args.if_max_samples,
-                },
-                "threshold": threshold_value,
-                "threshold_percentile": threshold_percentile,
-                "metrics": metrics_results,
-            }
-            try:
-                git_commit = (
-                    subprocess.run(
-                        ["git", "rev-parse", "HEAD"],
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    ).stdout.strip()
+            print("Warnung: Spalte 'test_case' fehlt im Sequenz-Export; verwende Labels für Training, falls verfügbar.")
+            if "anomaly" in df_seqs.columns:
+                correct_sequences = df_seqs.filter(pl.col("anomaly") == 0)
+            else:
+                print("  -> Keine Anomalielabels gefunden; benutze alle Sequenzen für das IF-Training.")
+                correct_sequences = df_seqs
+        holdout_fraction = min(max(args.if_holdout_fraction, 0.0), 0.5)
+        holdout_df = None
+        if holdout_fraction > 0 and correct_sequences.height > 1:
+            if "start_time" in correct_sequences.columns:
+                sorted_correct = correct_sequences.sort("start_time")
+            else:
+                sorted_correct = correct_sequences.sort("seq_id")
+            holdout_size = max(1, int(sorted_correct.height * holdout_fraction))
+            if holdout_size >= sorted_correct.height:
+                holdout_size = sorted_correct.height - 1
+            if holdout_size > 0:
+                holdout_df = sorted_correct.tail(holdout_size)
+                correct_sequences = sorted_correct.head(sorted_correct.height - holdout_size)
+                print(
+                    f"Using temporal hold-out: {holdout_size} sequences reserved ({holdout_fraction * 100:.2f}% of correct runs)."
                 )
-                metadata["git_commit"] = git_commit
-            except Exception:
-                metadata["git_commit"] = "unknown"
+                downsampling_performed = True
+        sad_if.train_df = correct_sequences
+        sad_if.test_df = df_seqs
 
-            metadata_lines = _dict_to_yaml_lines(metadata)
-            metadata_path = model_path.with_name("model.yml")
-            with metadata_path.open("w", encoding="utf-8") as fh:
-                fh.write("\n".join(metadata_lines) + "\n")
-            print(f"Metadata YAML gespeichert unter {metadata_path}")
-    elif args.dump_metadata:
-        print("Warnung: --dump-metadata benötigt --save-model, wird übersprungen.")
+        # Try loading an existing bundle if provided
+        model_loaded = False
+        if args.load_model is not None:
+            load_path = args.load_model
+            if not load_path.is_absolute():
+                load_path = (orig_cwd / load_path).resolve()
+            if load_path.exists():
+                try:
+                    loaded = joblib.load(load_path)
+                    # Support both tuple and dict-style bundles
+                    if isinstance(loaded, tuple) and len(loaded) == 2:
+                        model, vec = loaded
+                    elif isinstance(loaded, dict):
+                        model = loaded.get("model")
+                        vec = loaded.get("vectorizer") or loaded.get("vec")
+                    else:
+                        raise ValueError("Unrecognized model bundle format")
+                    sad_if.model = model
+                    sad_if.vec = vec
+                    model_loaded = True
+                    print(f"Loaded existing IF model bundle from {load_path}")
+                except Exception as exc:
+                    print(f"[WARN] Could not load model bundle from {load_path}: {exc}. Will train a new model.")
+            else:
+                print(f"[INFO] No existing model found at {load_path}; training a new model.")
+
+        # Prepare features (reuses existing vectorizer if present)
+        sad_if.prepare_train_test_data()
+
+        max_samples = args.if_max_samples
+        if isinstance(max_samples, str) and max_samples != "auto":
+            if max_samples.isdigit():
+                max_samples = int(max_samples)
+            else:
+                raise SystemExit("--if-max-samples muss 'auto' oder eine Ganzzahl sein.")
+
+        if not model_loaded:
+            sad_if.train_IsolationForest(
+                filter_anos=True,
+                n_estimators=args.if_n_estimators,
+                contamination=args.if_contamination,
+                max_samples=max_samples,
+            )
+        pred_if = sad_if.predict()
+
+        # Add raw anomaly scores and dense ranking for inspection.
+        score_if = (-sad_if.model.score_samples(sad_if.X_test)).tolist()
+        pred_if = pred_if.with_columns(
+            pl.Series(name="score_if", values=score_if)
+        ).with_columns(
+            pl.col("score_if").rank("dense", descending=True).alias("rank_if")
+        )
+        print("Top 5 IF-Runs (höchster Score zuerst):")
+        print(pred_if.sort("score_if", descending=True).head(5))
+
+        train_scores = (-sad_if.model.score_samples(sad_if.X_train_no_anos)).tolist()
+        holdout_scores = None
+        if holdout_df is not None:
+            holdout_matrix = _transform_with_detector(sad_if, holdout_df)
+            if holdout_matrix is not None:
+                holdout_scores = (-sad_if.model.score_samples(holdout_matrix)).tolist()
+
+        threshold_value = None
+        threshold_percentile = None
+        if args.if_threshold_percentile is not None:
+            percentile = args.if_threshold_percentile
+            if percentile <= 1:
+                percentile *= 100
+            percentile = max(0.0, min(percentile, 100.0))
+            source_scores = holdout_scores or train_scores
+            if source_scores:
+                threshold_value = float(np.percentile(source_scores, percentile))
+                threshold_percentile = percentile / 100.0
+                print(
+                    f"Derived IF score threshold: {threshold_value:.6f} (percentile {percentile:.2f})"
+                )
+            else:
+                print("Threshold percentile requested, but no scores available to calibrate.")
+
+        if threshold_value is not None:
+            pred_if = pred_if.with_columns(
+                (pl.col("score_if") >= threshold_value).alias("pred_if_threshold")
+            )
+
+        save_if_path = args.save_if
+        if not save_if_path.is_absolute():
+            save_if_path = (orig_cwd / save_if_path).resolve()
+        save_if_path.parent.mkdir(parents=True, exist_ok=True)
+        if save_if_path.suffix == ".csv":
+            pred_if.write_csv(save_if_path)
+        else:
+            pred_if.write_parquet(save_if_path)
+        print(f"IsolationForest-Ergebnis gespeichert unter {save_if_path}")
+
+        metrics_results = {}
+        if threshold_value is not None:
+            metrics_results["threshold_value"] = threshold_value
+            metrics_results["threshold_percentile"] = threshold_percentile
+        if args.report_precision_at:
+            precision_val = precision_at_k(pred_if, args.report_precision_at)
+            if precision_val is not None:
+                metrics_results[f"precision_at_{args.report_precision_at}"] = precision_val
+            else:
+                print("Precision@k requested, but insufficient data to compute.")
+
+        if args.report_fp_alpha:
+            fp_val = false_positive_rate_at_alpha(pred_if, args.report_fp_alpha)
+            if fp_val is not None:
+                metrics_results[f"fp_rate_at_{args.report_fp_alpha}"] = fp_val
+            else:
+                print("FP-rate@alpha requested, but insufficient data to compute.")
+
+        if args.report_psi:
+            if holdout_scores:
+                psi_val = population_stability_index(train_scores, holdout_scores)
+                if psi_val is not None:
+                    metrics_results["psi_train_vs_holdout"] = psi_val
+            else:
+                print("PSI requested, but hold-out scores are unavailable.")
+
+        if metrics_results:
+            metrics_dir = args.metrics_dir
+            if not metrics_dir.is_absolute():
+                metrics_dir = (orig_cwd / metrics_dir).resolve()
+            metrics_dir.mkdir(parents=True, exist_ok=True)
+            metrics_json = metrics_dir / "if_metrics.json"
+            metrics_csv = metrics_dir / "if_metrics.csv"
+            with metrics_json.open("w", encoding="utf-8") as fh:
+                json.dump(metrics_results, fh, indent=2)
+            with metrics_csv.open("w", encoding="utf-8", newline="") as fh:
+                writer = csv.writer(fh)
+                writer.writerow(["metric", "value"])
+                for key, value in metrics_results.items():
+                    writer.writerow([key, value])
+            print(f"IF metrics gespeichert unter {metrics_json} und {metrics_csv}")
+
+        if args.save_model:
+            model_path = args.save_model
+            if not model_path.is_absolute():
+                model_path = (orig_cwd / model_path).resolve()
+            model_path.parent.mkdir(parents=True, exist_ok=True)
+            if model_path.exists() and not args.overwrite_model:
+                raise SystemExit(
+                    f"Modelldatei existiert bereits unter {model_path}. Verwende --overwrite-model, um sie zu ersetzen."
+                )
+            joblib.dump((sad_if.model, sad_if.vec), model_path)
+            print(f"IsolationForest-Modell + Vectorizer gespeichert unter {model_path}")
+
+            if args.dump_metadata:
+                metadata = {
+                    "generated_at": datetime.utcnow().isoformat() + "Z",
+                    "training_rows": sad_if.train_df.height if sad_if.train_df is not None else 0,
+                    "holdout_rows": holdout_df.height if holdout_df is not None else 0,
+                    "if_params": {
+                        "item_list_col": args.if_item,
+                        "numeric_cols": numeric_cols,
+                        "contamination": args.if_contamination,
+                        "n_estimators": args.if_n_estimators,
+                        "max_samples": args.if_max_samples,
+                    },
+                    "threshold": threshold_value,
+                    "threshold_percentile": threshold_percentile,
+                    "metrics": metrics_results,
+                }
+                try:
+                    git_commit = (
+                        subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            capture_output=True,
+                            text=True,
+                            check=True,
+                        ).stdout.strip()
+                    )
+                    metadata["git_commit"] = git_commit
+                except Exception:
+                    metadata["git_commit"] = "unknown"
+
+                metadata_lines = _dict_to_yaml_lines(metadata)
+                metadata_path = model_path.with_name("model.yml")
+                with metadata_path.open("w", encoding="utf-8") as fh:
+                    fh.write("\n".join(metadata_lines) + "\n")
+                print(f"Metadata YAML gespeichert unter {metadata_path}")
+        elif args.dump_metadata:
+            print("Warnung: --dump-metadata benötigt --save-model, wird übersprungen.")
+    else:
+        if args.phase in ("if", "full"):
+            print("\nIsolation Forest übersprungen (--skip-if aktiviert).")
+            if args.dump_metadata:
+                print("  -> Hinweis: --dump-metadata greift nur, wenn ein IF-Modell gespeichert wird.")
 
     if args.phase == "if":
-        print("\nIsolation Forest abgeschlossen. Weitere Modelle übersprungen.")
+        if args.skip_if:
+            print("\nIsolation Forest wurde übersprungen (--skip-if); keine weiteren Phasen aktiv.")
+        else:
+            print("\nIsolation Forest abgeschlossen. Weitere Modelle übersprungen.")
         return
 
     if not selected_models:
@@ -660,7 +892,15 @@ def main() -> None:
             print(f"\n[{model_key}] übersprungen (benötigt {requirement}).")
             continue
 
+        original_rows = dataset.height
         train_df = dataset
+        eval_df = dataset
+        holdout_meta: dict[str, Any] = {
+            "applied": False,
+            "holdout_rows": 0,
+            "holdout_groups": 0,
+            "reason": "",
+        }
         if spec.get("train_selector") == "correct_only":
             if "test_case" in dataset.columns:
                 filtered = dataset.filter(pl.col("test_case") == "correct")
@@ -671,6 +911,38 @@ def main() -> None:
             else:
                 print(f"\n[{model_key}] übersprungen (Spalte 'test_case' fehlt für Filterung).")
                 continue
+        elif args.sup_holdout_fraction > 0:
+            train_candidate, holdout_candidate, holdout_meta_candidate = _run_based_holdout_split(
+                dataset,
+                args.sup_holdout_fraction,
+                shuffle=args.sup_holdout_shuffle,
+                min_per_bucket=args.sup_holdout_min_groups,
+                rng_seed=args.sample_seed,
+            )
+            if holdout_meta_candidate.get("reason") and not holdout_meta_candidate["applied"]:
+                print(f"  -> Hold-out übersprungen: {holdout_meta_candidate['reason']}")
+            if holdout_meta_candidate["applied"]:
+                split_valid = True
+                reason = ""
+                if "anomaly" in train_candidate.columns:
+                    train_anomalies = int(train_candidate["anomaly"].sum())
+                    holdout_anomalies = int(holdout_candidate["anomaly"].sum())
+                    if train_anomalies == 0:
+                        split_valid = False
+                        reason = "keine Anomalien im Training"
+                    elif holdout_anomalies == 0:
+                        split_valid = False
+                        reason = "keine Anomalien im Hold-out"
+                if split_valid:
+                    train_df = train_candidate
+                    eval_df = holdout_candidate
+                    holdout_meta = holdout_meta_candidate
+                    print(
+                        f"  -> Hold-out aktiv: {holdout_meta['holdout_groups']} Gruppen, "
+                        f"{holdout_meta['holdout_rows']} Zeilen."
+                    )
+                else:
+                    print(f"  -> Hold-out verworfen ({reason}).")
 
         print(f"\n[{model_key}] {spec['description']}")
         detector = AnomalyDetector()
@@ -678,16 +950,30 @@ def main() -> None:
         numeric_cols = spec.get("numeric_cols")
         detector.numeric_cols = numeric_cols if numeric_cols is not None else []
         detector.train_df = train_df
-        detector.test_df = dataset
+        detector.test_df = eval_df
         detector.prepare_train_test_data()
 
         train_kwargs = spec.get("train_kwargs", {})
         getattr(detector, spec["train_method"])(**train_kwargs)
         detector.predict()
         train_rows = detector.train_df.height if detector.train_df is not None else 0
-        total_rows = dataset.height
-        train_stats.append((spec["stat_label"], train_rows, total_rows))
-        _log_train_fraction(spec["stat_label"], train_rows, total_rows)
+        test_rows = detector.test_df.height if detector.test_df is not None else 0
+        entry = {
+            "label": spec["stat_label"],
+            "train_rows": train_rows,
+            "test_rows": test_rows,
+            "original_rows": original_rows,
+            "holdout_applied": holdout_meta["applied"],
+            "holdout_rows": holdout_meta["holdout_rows"],
+            "holdout_groups": holdout_meta["holdout_groups"],
+        }
+        train_stats.append(entry)
+        log_total_rows = (
+            train_rows + holdout_meta["holdout_rows"]
+            if holdout_meta["applied"]
+            else original_rows
+        )
+        _log_train_fraction(spec["stat_label"], train_rows, log_total_rows)
 
         if spec.get("requires_shap"):
             shap_kwargs = spec.get("shap_kwargs", {})
@@ -700,10 +986,21 @@ def main() -> None:
     if df_seqs is None or df_seqs.is_empty():
         print("\nNo sequence table available; skipping sequence-level models.")
 
-    print("\n[Summary] Full-data pipeline diagnostics:")
-    for label, train_rows, total_rows in train_stats:
-        frac = train_rows / max(total_rows, 1)
-        print(f"  {label}: train_rows={train_rows} total_rows={total_rows} fraction={frac:.4f}")
+    if train_stats:
+        print("\n[Summary] Full-data pipeline diagnostics:")
+        for entry in train_stats:
+            label = entry["label"]
+            train_rows = entry["train_rows"]
+            test_rows = entry["test_rows"]
+            msg = f"  {label}: train_rows={train_rows} test_rows={test_rows}"
+            if entry.get("holdout_applied"):
+                msg += (
+                    f" holdout_rows={entry['holdout_rows']} "
+                    f"holdout_groups={entry['holdout_groups']}"
+                )
+            else:
+                msg += " (kein Hold-out)"
+            print(msg)
     print(f"[Summary] Downsampling occurred: {'yes' if downsampling_performed else 'no'}")
 
     print("\nLO2 sample pipeline complete.")

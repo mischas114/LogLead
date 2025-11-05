@@ -10,7 +10,7 @@ Dieser Leitfaden erklärt, welche Dateien die LO2-Pipeline erzeugt, wann sie ben
 
 ## Standardausgabe (`demo/result/lo2/`)
 
-- `lo2_events.parquet`, `lo2_sequences.parquet`: Loader-Grundlage für alle weiteren Phasen. Niemals manuell verändern.
+- `lo2_sequences_enhanced.parquet` (immer), optional `lo2_sequences.parquet` via `--save-base-sequences`: Loader-Grundlage für alle weiteren Phasen. Niemals manuell verändern. (Event-Parquet nur bei Bedarf via `--save-events`.)
 - `lo2_if_predictions.parquet`: Enthält Score, Rang und Threshold-Markierung (`pred_if_threshold`).
 - `metrics/*.json|csv`: Kennzahlen zu Precision@k, FP-Rate@α, PSI – Pfad via `--metrics-dir` steuerbar.
 - `explainability/`: NN-Mapping (`if_nn_mapping.csv`), False-Positive-Liste, SHAP-Plots (`*.png`), Token-Rankings (`*_top_tokens.txt`).
@@ -23,14 +23,13 @@ Dieser Leitfaden erklärt, welche Dateien die LO2-Pipeline erzeugt, wann sie ben
 
 ## Enhanced-Parquets
 
-Wenn `LO2_samples.py` mit `--save-enhancers` läuft, entstehen:
+Wenn `LO2_samples.py` mit `--save-enhancers` läuft, entsteht:
 
-- `enhanced/lo2_events_enhanced.parquet`
 - `enhanced/lo2_sequences_enhanced.parquet`
 
-**Nutzen:** Beschleunigen Notebook-Analysen, weil Feature-Spalten nicht erneut berechnet werden müssen.
+**Nutzen:** Beschleunigt Notebook-Analysen, weil Feature-Spalten nicht erneut berechnet werden müssen.
 
-**Einschränkungen:** Die Skripte verbauen diese Caches nicht automatisch – Features werden bei jedem Lauf neu erstellt, um Konsistenz zu garantieren. Verwende die Enhanced-Parquets nur für explorative Arbeiten.
+**Einschränkungen:** Die Skripte berechnen Features bei Bedarf neu; nutze den Cache nur für explorative Arbeiten.
 
 ## Dateibenennung & Speicherorte
 

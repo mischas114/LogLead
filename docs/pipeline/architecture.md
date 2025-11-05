@@ -19,8 +19,9 @@ flowchart TD
 
     subgraph Loader["Phase B – Loader"]
         loader["LO2Loader\n(loglead.loaders.lo2)"]
-        events["lo2_events.parquet"]
+        events["lo2_events.parquet (optional)"]
         seqs["lo2_sequences.parquet"]
+        seqsEnhanced["lo2_sequences_enhanced.parquet"]
         metricsDf["metrics_df (optional)"]
     end
 
@@ -54,9 +55,10 @@ flowchart TD
     rawMetrics -.-> loader
     loader --> events
     loader --> seqs
+    loader --> seqsEnhanced
     loader -.-> metricsDf
     events --> eventEnh --> eventFeat --> registry
-    seqs --> seqEnh --> seqFeat --> registry
+    seqsEnhanced --> seqFeat --> registry
     registry --> ifModel --> preds
     registry --> outputs
     outputs --> metrics
@@ -74,8 +76,8 @@ flowchart TD
 - Traversiert `run_*`-Ordner, wählt `correct` + Fehlerfälle (`errors_per_run`, `dup_errors`, `single_error_type`).
 - Filtert Services via `--service-types` (empfohlen: `code token refresh-token`).
 - Entfernt optional die ersten `init_lines_to_skip` Zeilen (Standard 100) zur Vermeidung von Label-Leakage.
-- Liefert Polars-DataFrames `df` (Events) und `df_seq` (Sequences). Optional `metrics_df` für JSON-Metriken.
-- Persistenz über CLI (`--save-parquet`, `--output-dir`).
+- Liefert Polars-DataFrames `df` (Events) und `df_seq` (Sequences) sowie optional `metrics_df`.
+- Persistenz über CLI (`--save-parquet`, `--output-dir`); standardmäßig wird `lo2_sequences_enhanced.parquet` geschrieben (Basis-Sequenzen nur via `--save-base-sequences`). Events nur mittels `--save-events`.
 
 ### EventLogEnhancer / SequenceEnhancer
 
@@ -101,7 +103,7 @@ flowchart TD
 
 ## Datenartefakte
 
-### Events (`lo2_events.parquet`)
+### Events (optional, `lo2_events.parquet`)
 
 | Spalte | Typ | Beschreibung |
 | --- | --- | --- |
@@ -114,7 +116,7 @@ flowchart TD
 | `e_event_drain_id` | Utf8 | Drain-Template-ID (wenn verfügbar) |
 | `e_chars_len`, `e_lines_len` | Int | Längenmetriken |
 
-### Sequenzen (`lo2_sequences.parquet`)
+### Sequenzen (`lo2_sequences_enhanced.parquet`)
 
 | Spalte | Typ | Beschreibung |
 | --- | --- | --- |
@@ -123,7 +125,8 @@ flowchart TD
 | `normal`, `anomaly` | Bool | Sequenzlabel |
 | `start_time`, `end_time` | Datetime | Erstes/letztes Event |
 | `seq_len`, `duration_sec` | Int/Float | Aggregierte Kennzahlen |
-| `tokens_e_words`, `tokens_e_trigrams` | List[List[Utf8]] | Aggregierte Tokenlisten |
+| `e_words`, `e_trigrams` | List[Utf8] | Aggregierte Tokenlisten |
+| `e_words_len`, `e_trigrams_len` | Int | Anzahl Tokens/Trigramme |
 
 ### Predictions (`lo2_if_predictions.parquet`)
 
@@ -144,7 +147,7 @@ flowchart TD
 | Loader | `--runs`, `--errors-per-run`, `--service-types`, `--single-error-type`, `--trim-init-lines`, `--load-metrics` | Stellt Datenumfang ein und schützt vor Dupes. |
 | Enhancer | Methodenaufrufe im Code | Anpassungen erfordern Codeänderungen (z. B. zusätzliche Parser). |
 | IsolationForest | `--if-contamination`, `--if-item`, `--if-numeric`, `--if-max-samples`, `--if-holdout-fraction`, `--if-threshold-percentile` | Kontamination + Feature-Set entscheidend für Scoreverteilung. |
-| Registry | `--models`, `MODEL_REGISTRY` | Schlüssel in Kebab-Case; Sequence-Modelle werden übersprungen, wenn `lo2_sequences.parquet` fehlt. |
+| Registry | `--models`, `MODEL_REGISTRY` | Schlüssel in Kebab-Case; Sequence-Modelle erwarten `lo2_sequences_enhanced.parquet`. |
 | Explainability | `--nn-top-k`, `--nn-normal-sample`, `--shap-sample`, `--if-*` | Sampling reduziert Laufzeit und Speicher. |
 
 ## Bekannte Grenzen

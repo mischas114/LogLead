@@ -13,6 +13,7 @@ Dieses Dokument beschreibt den praktischen Ablauf, um die LO2-Demo innerhalb von
 - Python-Umgebung mit `loglead` und allen Abhängigkeiten (`pip install -e .` bzw. Poetry).
 - LO2-Rohdaten in der Struktur `<root>/run_<id>/<test_case>/*.log`.
 - Schreibrechte in `demo/result/lo2/` (standardmäßiger Output der Skripte).
+- Für eigene Sequenz-Parquets genügen die Spalten `seq_id`, `anomaly`, `normal`, `e_words`, `e_trigrams` sowie optionale Timing- und Längenfelder (`start_time`, `end_time`, `duration_sec`, `seq_len`).
 
 ## Quickstart
 
@@ -26,7 +27,7 @@ python demo/lo2_e2e/run_lo2_loader.py \
   --save-parquet \
   --output-dir demo/result/lo2
 
-# 2) Enhancement + Modelle (Phase C–E)
+# 2a) Enhancement + IF-Baseline (Phase C–E)
 python demo/lo2_e2e/LO2_samples.py \
   --phase full \
   --if-contamination 0.15 \
@@ -37,6 +38,19 @@ python demo/lo2_e2e/LO2_samples.py \
   --report-fp-alpha 0.01 \
   --dump-metadata
 
+# 2b) Enhancement + Decision Tree (Phase C–E, supervised)
+python demo/lo2_e2e/LO2_samples.py \
+  --phase full \
+  --skip-if \
+  --models event_dt_trigrams \
+  --sup-holdout-fraction 0.2 \
+  --sup-holdout-min-groups 1 \
+  --sup-holdout-shuffle \
+  --metrics-dir demo/result/lo2/metrics \
+  --dump-metadata
+> Hinweis: Ohne `--skip-if` läuft Phase D (Isolation Forest) mit und liefert Baseline-Scores; bei aktiviertem Flag wird er vollständig übersprungen.
+> Hold-out-Splits nutzen optimal `run` (und optional `test_case`/`service`). Fehlen diese Spalten, greift ein Fallback-Split auf Basis der `anomaly`-Labels/Zeilenanzahl.
+
 # 3) Explainability (Phase F)
 MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --root demo/result/lo2 \
@@ -45,15 +59,15 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --shap-sample 200
 ```
 
-> Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` zeigt alle Registry-Schlüssel. Ohne `--models` läuft das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`).
+> Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` zeigt alle Registry-Schlüssel. Ohne `--models` läuft das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) – alle Modelle arbeiten auf sequenzbasierten Token-Features.
 
 ## Phasenüberblick
 
 - **Phase A – Setup:** Umgebung prüfen, Abhängigkeiten installieren.
-- **Phase B – Loader:** `run_lo2_loader.py --save-parquet` erzeugt `lo2_events.parquet` und optional `lo2_sequences.parquet`.
+- **Phase B – Loader:** `run_lo2_loader.py --save-parquet` erzeugt `lo2_sequences_enhanced.parquet` (Basis-Sequenzen optional via `--save-base-sequences`, Events via `--save-events`).
 - **Phase C – Enhancer:** Wird automatisch in `LO2_samples.py` ausgeführt (Normalisierung, Tokens, Drain, Längen).
 - **Phase D – Isolation Forest:** Trainiert immer; Hold-out/Threshold per `--if-holdout-fraction`, `--if-threshold-percentile`.
-- **Phase E – Registry-Modelle:** `--models` schaltet zusätzliche Modelle zu (Event/Sequence, supervised/unsupervised).
+- **Phase E – Registry-Modelle:** `--models` schaltet zusätzliche Sequenzmodelle (supervised/unsupervised) zu.
 - **Phase F – Explainability:** `lo2_phase_f_explainability.py` generiert NN-Mapping, SHAP-Plots und False-Positive-Listen.
 
 ## Wichtige CLI-Flags
@@ -68,8 +82,8 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 
 | Datei | Quelle | Beschreibung |
 | --- | --- | --- |
-| `demo/result/lo2/lo2_events.parquet` | Loader | Events mit Labels, Timestamps, `seq_id` |
-| `demo/result/lo2/lo2_sequences.parquet` | Loader | Sequenzen (Run × Test × Service) |
+| `demo/result/lo2/lo2_sequences_enhanced.parquet` | Loader | Sequenzen inkl. Tokens, Länge, Dauer |
+| `demo/result/lo2/lo2_sequences.parquet` (optional) | Loader | Roh-Sequenzen (Run × Test × Service) |
 | `demo/result/lo2/lo2_if_predictions.parquet` | LO2_samples | Scores, Schwellen, Rankings |
 | `demo/result/lo2/metrics/*.json` | LO2_samples (`--report-*`) | Precision@k, FP-Rate, PSI |
 | `models/lo2_if.joblib` | LO2_samples (`--save-model`) | IsolationForest + Vectorizer |

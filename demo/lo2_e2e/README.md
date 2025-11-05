@@ -4,10 +4,11 @@ This folder groups the runnable scripts for the LO2 pipeline, covering data load
 
 ## Quickstart
 
-1. **Load raw runs to Parquet**
+1. **Load raw runs to Parquet (sequences only by default)**
    ```bash
    python demo/lo2_e2e/run_lo2_loader.py --root /path/to/lo2_data --runs 5 --save-parquet --output-dir demo/result/lo2
    ```
+   Der Loader schreibt `lo2_sequences_enhanced.parquet` (und optional mit `--save-base-sequences` auch `lo2_sequences.parquet`). Falls du zusätzlich die Event-Tabelle brauchst, ergänze `--save-events`.
 2. **Generate enhancements and anomaly predictions**
    ```bash
    python demo/lo2_e2e/LO2_samples.py --phase full --save-enhancers --save-model models/lo2_if.joblib
@@ -18,6 +19,20 @@ This folder groups the runnable scripts for the LO2 pipeline, covering data load
    ```bash
    MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --shap-sample 200
    ```
+
+## Sequence hold-out
+
+Alle Modelle (IsolationForest wie auch die supervised Varianten) laufen auf sequenzbasierten Features und reservieren automatisch einen run-basierten Hold-out von 20 % der Runs pro Service/Test-Case. Die wichtigsten Schalter:
+
+- `--sup-holdout-fraction`: Anteil der Run-Gruppen im Hold-out (Standard 0.2, 0 deaktiviert den Split).
+- `--sup-holdout-min-groups`: Mindestanzahl an Gruppen pro Bucket, die reserviert werden (Standard 1).
+- `--sup-holdout-shuffle`: Zufällige statt zeitlicher Auswahl (nutzt `--sample-seed`).
+
+Beispiel:
+
+```bash
+python demo/lo2_e2e/LO2_samples.py --phase full --models event_dt_trigrams --sup-holdout-fraction 0.2
+```
 
 ### Fast scoring with an existing model
 
@@ -40,25 +55,25 @@ All outputs are written beneath `demo/result/lo2` by default. Adjust CLI options
 
 ## Configurable anomaly detectors
 
-`LO2_samples.py` now behaves like a small testbed: you can mix and match anomaly detectors without touching the code.
+`LO2_samples.py` now behaves like a small testbed: you can mix and match sequence-based anomaly detectors without touching the code.
 
 - Show every available key with `python demo/lo2_e2e/LO2_samples.py --list-models`.
-- The default set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) mirrors the original Phase E/F baseline.
+- The default set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) mirrors the original Phase E/F baseline – alle Schlüssel arbeiten jetzt auf Sequenzrepräsentationen.
 - Pass `--models key1,key2,...` to run a custom line-up. Example:
   ```bash
   python demo/lo2_e2e/LO2_samples.py --models event_lr_words,event_rf_words,event_lof_words,sequence_shap_lr_words
   ```
-- Sequence-level detectors are skipped automatically when no `lo2_sequences.parquet` file is available.
+- Die Pipeline erwartet `lo2_sequences_enhanced.parquet` (oder erzeugt es aus `lo2_sequences.parquet` + optionalen Events).
 
 Selected keys (use `--list-models` to inspect the full list):
 
 | Key | Level | Kurzbeschreibung |
 | --- | --- | --- |
-| `event_lr_words` | Events | LogisticRegression auf Worttokens (BOW) |
-| `event_dt_trigrams` | Events | DecisionTree auf Trigram-Features |
-| `event_lsvm_words` | Events | LinearSVM für Worttokens |
-| `event_rf_words` | Events | RandomForest für Worttokens |
-| `event_lof_words` | Events | LocalOutlierFactor (trainiert nur auf `test_case=correct`) |
+| `event_lr_words` | Sequenzen | LogisticRegression auf Worttokens (BOW) |
+| `event_dt_trigrams` | Sequenzen | DecisionTree auf Trigram-Features |
+| `event_lsvm_words` | Sequenzen | LinearSVM für Worttokens |
+| `event_rf_words` | Sequenzen | RandomForest für Worttokens |
+| `event_lof_words` | Sequenzen | LocalOutlierFactor (trainiert nur auf `test_case=correct`) |
 | `sequence_lr_numeric` | Sequenzen | LogisticRegression auf `seq_len` + `duration_sec` |
 | `sequence_shap_lr_words` | Sequenzen | LogisticRegression auf Worttokens + SHAP-Plot |
 
