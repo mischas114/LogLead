@@ -29,3 +29,4 @@ demo/result/
 *.parquet
 result/
 demo/result/
+demo/lo2_e2e/demo_output/
