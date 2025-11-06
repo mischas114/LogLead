@@ -1,0 +1,13 @@
+models:
+  dt_demo:
+    adapter: decision_tree
+    description: Decision tree on synthetic log sequences
+    path: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/models/dt_demo.joblib
+  rf_demo:
+    adapter: random_forest
+    description: Random forest on synthetic log sequences
+    path: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/models/rf_demo.joblib
+  xgb_demo:
+    adapter: xgboost
+    description: XGBoost on synthetic log sequences
+    path: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/models/xgb_demo.joblib

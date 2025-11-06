@@ -53,7 +53,7 @@ def run(context: Dict[str, Any], **kwargs) -> Dict[str, Any]:
     
     # Generate global explanation
     print(f"[explain] Generating global explanation")
-    y = df_sequences["anomaly"].to_numpy() if df_sequences and "anomaly" in df_sequences.columns else None
+    y = df_sequences["anomaly"].to_numpy() if df_sequences is not None and "anomaly" in df_sequences.columns else None
     global_explanation = explainer.explain_global(adapter, X, y)
     
     # Generate local explanations for sample indices

@@ -1,0 +1,22 @@
+pipeline:
+- step: load_data
+  with:
+    sequences_path: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/synthetic_sequences.parquet
+- step: preprocess
+  with:
+    feature_columns: &id001
+    - seq_len
+    - duration_sec
+    - error_count
+    - word_count
+    - cpu_usage
+- step: predict
+  with:
+    model: xgb_demo
+    models_config: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/config/models_demo.yaml
+- step: explain
+  with:
+    feature_names: *id001
+    max_samples: 5
+    model: xgb_demo
+    output_file: /home/runner/work/LogLead/LogLead/demo/lo2_e2e/demo_output/config/explanations_xgb_demo.jsonl

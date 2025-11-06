@@ -13,6 +13,8 @@ from pathlib import Path
 from .core import registry
 from .core.runner import run_pipeline_from_file
 from . import steps  # Import to trigger registration
+from .core import adapters  # Import to register adapters
+from .core import explainers  # Import to register explainers
 
 
 def main():
