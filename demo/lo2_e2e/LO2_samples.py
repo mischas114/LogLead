@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import json
 import os
 import random
 import subprocess
+import time
+from contextlib import suppress
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import polars as pl
 
@@ -19,6 +22,12 @@ from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
 import loglead.explainer as ex
 import joblib
 import numpy as np
+from sklearn.metrics import accuracy_score
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover
+    psutil = None
 
 from metrics_utils import (
     false_positive_rate_at_alpha,
@@ -32,6 +41,25 @@ DEFAULT_SUPERVISED_MODELS: List[str] = [
     "sequence_lr_numeric",
     "sequence_shap_lr_words",
 ]
+
+HARD_LIMITS = {
+    "max_depth": 20,
+    "n_estimators": 300,
+    "max_features": 0.5,
+    "max_leaf_nodes": 512,
+    "max_leaves": 512,
+}
+
+VECTORIZER_DEFAULTS = {
+    "dtype": np.float32,
+    "binary": True,
+    "strip_accents": "unicode",
+    "max_df": 0.9,
+    "min_df": 2,
+    "max_features": 100_000,
+}
+
+DEFAULT_PREDICT_BATCH_SIZE = 50_000
 
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "event_lr_words": {
@@ -48,6 +76,15 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "item_list_col": "e_trigrams",
         "numeric_cols": [],
         "train_method": "train_DT",
+        "train_kwargs": {
+            "max_depth": 8,
+            "min_samples_leaf": 10,
+            "min_samples_split": 20,
+            "max_leaf_nodes": 256,
+            "max_features": 0.3,
+            "random_state": 42,
+        },
+        "vectorizer_kwargs": {"max_features": 40000, "min_df": 5},
         "stat_label": "event_dt_trigrams",
     },
     "event_lsvm_words": {
@@ -64,6 +101,17 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_RF",
+        "train_kwargs": {
+            "n_estimators": 150,
+            "max_depth": 12,
+            "min_samples_leaf": 10,
+            "min_samples_split": 20,
+            "max_features": 0.3,
+            "bootstrap": True,
+            "n_jobs": 1,
+            "random_state": 42,
+        },
+        "vectorizer_kwargs": {"max_features": 40000, "min_df": 5},
         "stat_label": "event_rf_words",
     },
     "event_xgb_words": {
@@ -72,6 +120,19 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "item_list_col": "e_words",
         "numeric_cols": [],
         "train_method": "train_XGB",
+        "train_kwargs": {
+            "tree_method": "hist",
+            "max_depth": 8,
+            "min_child_weight": 5,
+            "subsample": 0.7,
+            "colsample_bytree": 0.6,
+            "n_estimators": 120,
+            "max_leaves": 256,
+            "learning_rate": 0.1,
+            "n_jobs": 1,
+            "random_state": 42,
+        },
+        "vectorizer_kwargs": {"max_features": 40000, "min_df": 5},
         "stat_label": "event_xgb_words",
     },
     "event_lof_words": {
@@ -147,6 +208,235 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "shap_plot_type": "summary",
     },
 }
+
+
+def _detect_available_ram_gb() -> float | None:
+    if psutil is None:
+        return None
+    try:
+        return psutil.virtual_memory().available / (1024 ** 3)
+    except Exception:
+        return None
+
+
+def _clamp_numeric(
+    model_key: str,
+    params: Dict[str, Any],
+    key: str,
+    adjustments: List[str],
+    *,
+    min_val: float | None = None,
+    max_val: float | None = None,
+    clamp_int: bool = False,
+) -> None:
+    if key not in params:
+        return
+    value = params[key]
+    if value is None:
+        return
+    if isinstance(value, str):
+        return
+    new_value = value
+    if min_val is not None and value < min_val:
+        new_value = min_val
+    if max_val is not None and value > max_val:
+        new_value = max_val
+    if clamp_int:
+        new_value = int(new_value)
+    if new_value != value:
+        params[key] = new_value
+        adjustments.append(
+            f"[Guard:{model_key}] {key} adjusted from {value} to {new_value}"
+        )
+
+
+def _sanitize_train_kwargs(model_key: str, raw_kwargs: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    sanitized = raw_kwargs.copy()
+    notes: List[str] = []
+
+    _clamp_numeric(model_key, sanitized, "max_depth", notes, max_val=HARD_LIMITS["max_depth"])
+    _clamp_numeric(model_key, sanitized, "n_estimators", notes, max_val=HARD_LIMITS["n_estimators"], clamp_int=True)
+    _clamp_numeric(model_key, sanitized, "max_features", notes, min_val=0.05, max_val=HARD_LIMITS["max_features"])
+    _clamp_numeric(model_key, sanitized, "max_leaf_nodes", notes, max_val=HARD_LIMITS["max_leaf_nodes"], clamp_int=True)
+    _clamp_numeric(model_key, sanitized, "max_leaves", notes, max_val=HARD_LIMITS["max_leaves"], clamp_int=True)
+
+    if sanitized.get("min_samples_leaf") is not None:
+        _clamp_numeric(model_key, sanitized, "min_samples_leaf", notes, min_val=2, clamp_int=True)
+    if sanitized.get("min_samples_split") is not None:
+        _clamp_numeric(model_key, sanitized, "min_samples_split", notes, min_val=4, clamp_int=True)
+
+    if model_key == "event_rf_words":
+        sanitized.setdefault("max_samples", 0.8)
+        sanitized.setdefault("warm_start", True)
+        sanitized.setdefault("n_jobs", 1)
+    if model_key == "event_xgb_words":
+        sanitized.setdefault("tree_method", "hist")
+        sanitized.setdefault("max_bin", 256)
+        sanitized.setdefault("grow_policy", "lossguide")
+        sanitized.setdefault("early_stopping_rounds", 30)
+        sanitized.setdefault("eval_metric", "logloss")
+        sanitized.setdefault("n_jobs", 1)
+        _clamp_numeric(model_key, sanitized, "max_bin", notes, min_val=32, max_val=256, clamp_int=True)
+        _clamp_numeric(model_key, sanitized, "subsample", notes, min_val=0.5, max_val=0.9)
+        _clamp_numeric(model_key, sanitized, "colsample_bytree", notes, min_val=0.4, max_val=0.9)
+
+    return sanitized, notes
+
+
+def _sanitize_vectorizer_kwargs(
+    model_key: str,
+    raw_kwargs: Dict[str, Any] | None,
+    *,
+    use_vectorizer: bool,
+) -> Tuple[Dict[str, Any] | None, List[str]]:
+    if not use_vectorizer:
+        return None, []
+    sanitized = VECTORIZER_DEFAULTS.copy()
+    if raw_kwargs:
+        sanitized.update(raw_kwargs)
+    notes: List[str] = []
+
+    max_features = sanitized.get("max_features")
+    if max_features is not None:
+        max_features = int(max_features)
+        if max_features > VECTORIZER_DEFAULTS["max_features"]:
+            notes.append(
+                f"[Guard:{model_key}] vectorizer max_features adjusted from {max_features} to {VECTORIZER_DEFAULTS['max_features']}"
+            )
+            max_features = VECTORIZER_DEFAULTS["max_features"]
+        sanitized["max_features"] = max_features
+
+    min_df = sanitized.get("min_df", VECTORIZER_DEFAULTS["min_df"])
+    if isinstance(min_df, (int, float)) and min_df < VECTORIZER_DEFAULTS["min_df"]:
+        notes.append(
+            f"[Guard:{model_key}] vectorizer min_df raised to {VECTORIZER_DEFAULTS['min_df']}"
+        )
+        sanitized["min_df"] = VECTORIZER_DEFAULTS["min_df"]
+
+    sanitized.setdefault("token_pattern", r"(?u)\b\w\w+\b")
+    sanitized.setdefault("binary", True)
+    sanitized.setdefault("dtype", np.float32)
+
+    return sanitized, notes
+
+
+def _apply_memory_guard(
+    model_key: str,
+    train_kwargs: Dict[str, Any],
+    vectorizer_kwargs: Dict[str, Any] | None,
+    available_gb: float | None,
+) -> List[str]:
+    adjustments: List[str] = []
+    if available_gb is None:
+        return adjustments
+
+    if available_gb < 8:
+        if train_kwargs.get("max_depth") and train_kwargs["max_depth"] > 10:
+            adjustments.append(f"[Guard:{model_key}] max_depth tightened for low RAM ({available_gb:.1f} GB available)")
+            train_kwargs["max_depth"] = 10
+        if vectorizer_kwargs and vectorizer_kwargs.get("max_features", 0) > 30000:
+            adjustments.append(f"[Guard:{model_key}] vectorizer max_features tightened to 30000 due to RAM constraints")
+            vectorizer_kwargs["max_features"] = 30000
+    if available_gb < 4:
+        if train_kwargs.get("n_estimators") and train_kwargs["n_estimators"] > 120:
+            adjustments.append(f"[Guard:{model_key}] n_estimators cut to 120 due to very low RAM")
+            train_kwargs["n_estimators"] = 120
+        if vectorizer_kwargs and vectorizer_kwargs.get("max_features", 0) > 20000:
+            vectorizer_kwargs["max_features"] = 20000
+            adjustments.append(f"[Guard:{model_key}] vectorizer max_features capped at 20000")
+    if train_kwargs.get("n_jobs", 1) != 1:
+        train_kwargs["n_jobs"] = 1
+        adjustments.append(f"[Guard:{model_key}] n_jobs forced to 1 to control peak memory")
+    return adjustments
+
+
+def _prepare_model_configs(
+    model_key: str,
+    raw_train_kwargs: Dict[str, Any],
+    raw_vectorizer_kwargs: Dict[str, Any] | None,
+    *,
+    use_vectorizer: bool,
+    available_ram_gb: float | None,
+    memory_guard_enabled: bool,
+) -> Tuple[Dict[str, Any], Dict[str, Any] | None, List[str]]:
+    train_kwargs, notes = _sanitize_train_kwargs(model_key, raw_train_kwargs)
+    vectorizer_kwargs, vector_notes = _sanitize_vectorizer_kwargs(
+        model_key,
+        raw_vectorizer_kwargs,
+        use_vectorizer=use_vectorizer,
+    )
+    adjustments = notes + vector_notes
+    if memory_guard_enabled:
+        adjustments += _apply_memory_guard(model_key, train_kwargs, vectorizer_kwargs, available_ram_gb)
+    return train_kwargs, vectorizer_kwargs, adjustments
+
+
+def _estimate_model_size_mb(model: Any) -> float | None:
+    buffer = io.BytesIO()
+    try:
+        joblib.dump(model, buffer, compress=3)
+    except Exception:
+        return None
+    size_mb = buffer.tell() / (1024 ** 2)
+    return round(size_mb, 4)
+
+
+def _collect_tree_stats(model: Any) -> List[str]:
+    stats: List[str] = []
+    if hasattr(model, "get_depth"):
+        try:
+            stats.append(f"depth={model.get_depth()}")
+        except Exception:
+            pass
+    if hasattr(model, "estimators_"):
+        depths = []
+        for est in getattr(model, "estimators_", []):
+            with suppress(Exception):
+                depths.append(est.get_depth())
+        if depths:
+            stats.append(f"avg_depth={np.mean(depths):.1f}")
+            stats.append(f"trees={len(depths)}")
+    if hasattr(model, "n_estimators"):
+        try:
+            stats.append(f"n_estimators={model.n_estimators}")
+        except Exception:
+            pass
+    if hasattr(model, "get_booster"):
+        try:
+            booster = model.get_booster()
+            stats.append(f"trees={booster.best_ntree_limit or booster.num_boosted_rounds()}")
+        except Exception:
+            pass
+    return stats
+
+
+def _log_model_resource_stats(
+    label: str,
+    detector: AnomalyDetector,
+    train_kwargs: Dict[str, Any],
+    vectorizer_kwargs: Dict[str, Any] | None,
+    elapsed: float,
+) -> None:
+    feature_count = detector.X_train.shape[1] if detector.X_train is not None else None
+    vocab_size = None
+    vec = detector.vec
+    if vec is not None and hasattr(vec, "vocabulary_") and vec.vocabulary_ is not None:
+        vocab_size = len(vec.vocabulary_)
+    model_size_mb = _estimate_model_size_mb(detector.model)
+
+    parts = [f"time={elapsed:.2f}s"]
+    if feature_count is not None:
+        parts.append(f"features={feature_count}")
+    if vocab_size is not None:
+        parts.append(f"vocab={vocab_size}")
+    if model_size_mb is not None:
+        parts.append(f"size_mb={model_size_mb:.2f}")
+    parts.extend(_collect_tree_stats(detector.model))
+    if vectorizer_kwargs and "max_features" in vectorizer_kwargs:
+        parts.append(f"vec_max_features={vectorizer_kwargs['max_features']}")
+    if train_kwargs.get("n_estimators"):
+        parts.append(f"n_estimators={train_kwargs['n_estimators']}")
+    print(f"[Resource] {label}: " + ", ".join(parts))
 
 
 def _infer_time_column(df: pl.DataFrame) -> str | None:
@@ -353,6 +643,12 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for sampling enhanced records and optional down-sampling.",
     )
     parser.add_argument(
+        "--predict-batch-size",
+        type=int,
+        default=DEFAULT_PREDICT_BATCH_SIZE,
+        help="Batchgröße für predict/predict_proba (0 = keine Chunking-Strategie).",
+    )
+    parser.add_argument(
         "--sup-holdout-fraction",
         type=float,
         default=0.2,
@@ -481,6 +777,11 @@ def parse_args() -> argparse.Namespace:
         help="Write a model.yml snapshot alongside the joblib artefact.",
     )
     parser.add_argument(
+        "--disable-memory-guard",
+        action="store_true",
+        help="Deaktiviert die adaptive RAM-Guard-Logik für Baum- und Vectorizer-Parameter.",
+    )
+    parser.add_argument(
         "--models",
         default=",".join(DEFAULT_SUPERVISED_MODELS),
         help="Kommagetrennte Liste an Schlüsselwörtern für zusätzliche Modelle (siehe --list-models).",
@@ -529,6 +830,16 @@ def _log_train_fraction(label: str, train_rows: int, total_rows: int) -> None:
 
 def main() -> None:
     args = parse_args()
+
+    os.environ["PYTHONHASHSEED"] = str(args.sample_seed)
+    random.seed(args.sample_seed)
+    np.random.seed(args.sample_seed)
+    available_ram_gb = _detect_available_ram_gb()
+    memory_guard_enabled = not args.disable_memory_guard
+    if available_ram_gb is not None:
+        print(f"[Guard] Available RAM (approx.): {available_ram_gb:.1f} GB")
+    if memory_guard_enabled and available_ram_gb is None:
+        print("[Guard] psutil nicht verfügbar – Ressourcenbegrenzungen basieren auf statischen Limits.")
 
     if args.list_models:
         print("Verfügbare Modelle:")
@@ -651,7 +962,20 @@ def main() -> None:
     if run_if_phase:
         print("\nTraining/Loading Isolation Forest on sequence tokens (Phase D)")
         numeric_cols = [col.strip() for col in args.if_numeric.split(",") if col.strip()]
-        sad_if = AnomalyDetector(item_list_col=args.if_item, numeric_cols=numeric_cols or None)
+        if_vectorizer_kwargs, if_vectorizer_notes = _sanitize_vectorizer_kwargs(
+            "if_baseline",
+            {"max_features": 60000, "min_df": 3},
+            use_vectorizer=bool(args.if_item),
+        )
+        for note in if_vectorizer_notes:
+            print(f"  -> {note}")
+        sad_if = AnomalyDetector(
+            item_list_col=args.if_item,
+            numeric_cols=numeric_cols or None,
+            vectorizer_kwargs=if_vectorizer_kwargs,
+            random_state=args.sample_seed,
+            predict_batch_size=args.predict_batch_size,
+        )
         # IsolationForest learns only from normal runs; keep anomalies in test_df for evaluation.
         if "test_case" in df_seqs.columns:
             correct_sequences = df_seqs.filter(pl.col("test_case") == "correct")
@@ -718,13 +1042,23 @@ def main() -> None:
             else:
                 raise SystemExit("--if-max-samples muss 'auto' oder eine Ganzzahl sein.")
 
+        if_train_kwargs = {
+            "n_estimators": args.if_n_estimators,
+            "contamination": args.if_contamination,
+            "max_samples": max_samples,
+        }
+        fit_elapsed = 0.0
         if not model_loaded:
+            start_fit = time.perf_counter()
             sad_if.train_IsolationForest(
                 filter_anos=True,
                 n_estimators=args.if_n_estimators,
                 contamination=args.if_contamination,
                 max_samples=max_samples,
             )
+            fit_elapsed = time.perf_counter() - start_fit
+        if hasattr(sad_if, "model") and sad_if.model is not None:
+            _log_model_resource_stats("if_baseline", sad_if, if_train_kwargs, if_vectorizer_kwargs, fit_elapsed)
         pred_if = sad_if.predict()
 
         # Add raw anomaly scores and dense ranking for inspection.
@@ -827,7 +1161,7 @@ def main() -> None:
                 raise SystemExit(
                     f"Modelldatei existiert bereits unter {model_path}. Verwende --overwrite-model, um sie zu ersetzen."
                 )
-            joblib.dump((sad_if.model, sad_if.vec), model_path)
+            joblib.dump((sad_if.model, sad_if.vec), model_path, compress=3)
             print(f"IsolationForest-Modell + Vectorizer gespeichert unter {model_path}")
 
             if args.dump_metadata:
@@ -945,17 +1279,59 @@ def main() -> None:
                     print(f"  -> Hold-out verworfen ({reason}).")
 
         print(f"\n[{model_key}] {spec['description']}")
-        detector = AnomalyDetector()
-        detector.item_list_col = spec.get("item_list_col")
+        item_list_col = spec.get("item_list_col")
         numeric_cols = spec.get("numeric_cols")
-        detector.numeric_cols = numeric_cols if numeric_cols is not None else []
+        raw_train_kwargs = dict(spec.get("train_kwargs", {}))
+        raw_vectorizer_kwargs = dict(spec.get("vectorizer_kwargs", {})) if spec.get("vectorizer_kwargs") else None
+        train_kwargs, vectorizer_kwargs, guard_notes = _prepare_model_configs(
+            model_key,
+            raw_train_kwargs,
+            raw_vectorizer_kwargs,
+            use_vectorizer=bool(item_list_col),
+            available_ram_gb=available_ram_gb,
+            memory_guard_enabled=memory_guard_enabled,
+        )
+        for note in guard_notes:
+            print(f"  -> {note}")
+
+        detector = AnomalyDetector(
+            item_list_col=item_list_col,
+            numeric_cols=numeric_cols if numeric_cols is not None else [],
+            vectorizer_kwargs=vectorizer_kwargs,
+            random_state=args.sample_seed,
+            predict_batch_size=args.predict_batch_size,
+        )
         detector.train_df = train_df
         detector.test_df = eval_df
         detector.prepare_train_test_data()
 
-        train_kwargs = spec.get("train_kwargs", {})
-        getattr(detector, spec["train_method"])(**train_kwargs)
+        train_kwargs_final = train_kwargs.copy()
+        if spec["train_method"] == "train_XGB":
+            if holdout_meta.get("applied") and detector.labels_test:
+                eval_y = np.asarray(detector.labels_test, dtype=np.int32)
+                train_kwargs_final.setdefault("eval_set", [(detector.X_test, eval_y)])
+                train_kwargs_final.setdefault("verbose", False)
+            else:
+                train_kwargs_final.pop("early_stopping_rounds", None)
+
+        start_fit = time.perf_counter()
+        getattr(detector, spec["train_method"])(**train_kwargs_final)
+        fit_elapsed = time.perf_counter() - start_fit
         detector.predict()
+        _log_model_resource_stats(model_key, detector, train_kwargs_final, vectorizer_kwargs, fit_elapsed)
+        if holdout_meta.get("applied") and detector.labels_train and detector.labels_test:
+            try:
+                train_pred = detector._batched_call(detector.model.predict, detector.X_train)
+                holdout_pred = detector._batched_call(detector.model.predict, detector.X_test)
+                train_acc = accuracy_score(detector.labels_train, train_pred)
+                holdout_acc = accuracy_score(detector.labels_test, holdout_pred)
+                if train_acc - holdout_acc > 0.01:
+                    drop = train_acc - holdout_acc
+                    print(
+                        f"[Guard:{model_key}] Hold-out Accuracy drop {drop:.3f} (train={train_acc:.3f}, holdout={holdout_acc:.3f})"
+                    )
+            except Exception:
+                pass
         train_rows = detector.train_df.height if detector.train_df is not None else 0
         test_rows = detector.test_df.height if detector.test_df is not None else 0
         entry = {
@@ -966,6 +1342,7 @@ def main() -> None:
             "holdout_applied": holdout_meta["applied"],
             "holdout_rows": holdout_meta["holdout_rows"],
             "holdout_groups": holdout_meta["holdout_groups"],
+            "guard_notes": list(guard_notes),
         }
         train_stats.append(entry)
         log_total_rows = (
@@ -1001,6 +1378,9 @@ def main() -> None:
             else:
                 msg += " (kein Hold-out)"
             print(msg)
+            guard_notes_entry = entry.get("guard_notes") or []
+            for note in guard_notes_entry:
+                print(f"    {note}")
     print(f"[Summary] Downsampling occurred: {'yes' if downsampling_performed else 'no'}")
 
     print("\nLO2 sample pipeline complete.")

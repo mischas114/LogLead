@@ -1,7 +1,7 @@
 ---
 title: Ausführungsleitfaden LO2-Pipeline
 summary: Schritt-für-Schritt-Anleitung vom Loader bis zur Explainability.
-last_updated: 2025-11-03
+last_updated: 2025-11-11
 ---
 
 # Ausführungsleitfaden LO2-Pipeline
@@ -38,25 +38,53 @@ python demo/lo2_e2e/LO2_samples.py \
   --report-fp-alpha 0.01 \
   --dump-metadata
 
-# 2b) Enhancement + Decision Tree (Phase C–E, supervised)
+# 2b) Enhancement + Supervised Benchmark (Phase C–E, ohne IF)
 python demo/lo2_e2e/LO2_samples.py \
   --phase full \
   --skip-if \
-  --models event_dt_trigrams \
+  --models event_lr_words,event_dt_trigrams,event_xgb_words,sequence_shap_lr_words \
   --sup-holdout-fraction 0.2 \
   --sup-holdout-min-groups 1 \
   --sup-holdout-shuffle \
-  --metrics-dir demo/result/lo2/metrics \
+  --predict-batch-size 25000 \
+  --sample-seed 42
 > Hinweis: Ohne `--skip-if` läuft Phase D (Isolation Forest) mit und liefert Baseline-Scores; bei aktiviertem Flag wird er vollständig übersprungen.
+> `--save-enhancers` hilft, falls `lo2_sequences_enhanced.parquet` noch nicht existiert und später erneut genutzt werden soll.
 > Hold-out-Splits nutzen optimal `run` (und optional `test_case`/`service`). Fehlen diese Spalten, greift ein Fallback-Split auf Basis der `anomaly`-Labels/Zeilenanzahl.
 
 # 3) Explainability (Phase F)
 MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --root demo/result/lo2 \
-  --if-contamination 0.15 \
+  --skip-if \
+  --sup-models event_lr_words,event_dt_trigrams,event_xgb_words,sequence_shap_lr_words \
+  --nn-source sequence_shap_lr_words \
+  --sup-holdout-fraction 0.2 \
   --nn-top-k 50 \
   --shap-sample 200
 ```
+
+> Neu: `lo2_phase_f_explainability.py` kann IF komplett überspringen (`--skip-if`), beliebige Registry-Modelle erneut trainieren (`--sup-models`, `--list-models`) und das NN-Mapping auf ein supervised Modell umschalten (`--nn-source`). `--sup-holdout-*` spiegelt dabei die Split-Logik aus `LO2_samples.py`.
+
+## Prompt-Vorlage: IF-freie Pipeline + Explainability
+
+Nutze die nachfolgende Prompt, falls du die LO2-Pipeline bewusst vom Isolation-Forest entkoppeln und trotzdem erklärbare Entscheidungen erzeugen möchtest (z. B. in einem Agenten-/Copilot-Run):
+
+```text
+Ziel: LO2 e2e Pipeline ohne Isolation Forest (nur Registry-Modelle) ausführen und Explainability-Artefakte erzeugen, um Anomalie-Entscheidungen prüfen zu können.
+Kontext: repo=LogLead, Arbeitsverzeichnis=/Users/<user>/Projects/LogLead
+Annahmen: Loader-Parquets noch nicht vorhanden → zuerst Loader starten; ansonsten bei Schritt 2 fortfahren.
+
+Schritte:
+1. python demo/lo2_e2e/run_lo2_loader.py --root <pfad_zu_lo2_runs> --runs 5 --errors-per-run 1 --service-types code token refresh-token --save-parquet --output-dir demo/result/lo2
+2. python demo/lo2_e2e/LO2_samples.py --phase full --skip-if --models event_lr_words,event_dt_trigrams,event_xgb_words,sequence_shap_lr_words --sup-holdout-fraction 0.2 --sup-holdout-min-groups 1 --sup-holdout-shuffle --predict-batch-size 25000 --sample-seed 42 --save-enhancers --dump-metadata --report-precision-at 200 --report-fp-alpha 0.01
+3. MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --root demo/result/lo2 --skip-if --sup-models event_lr_words,event_dt_trigrams,event_xgb_words,sequence_shap_lr_words --nn-source sequence_shap_lr_words --sup-holdout-fraction 0.2 --nn-top-k 50 --shap-sample 200
+
+Validierung:
+- Prüfe demo/result/lo2/lo2_sequences_enhanced.parquet und demo/result/lo2/metrics/*.json
+- Kontrolle der erklärbaren Entscheidungen via demo/result/lo2/explainability/*
+```
+
+> Anpassungsideen: `--models`/`--sup-models` lassen sich per `python demo/lo2_e2e/lo2_phase_f_explainability.py --list-models` inspizieren; `--nn-source=if` nutzt weiterhin IsolationForest, alle anderen Werte zielen auf Registry-Keys. Falls Loader-Artefakte bereits existieren, Schritt 1 einfach streichen.
 
 ### Empfohlene Modell-Linien (Stand 2025-11-05)
 
@@ -65,7 +93,7 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 - **Logistic Regression (Tokens):** `event_lr_words`/`sequence_lr_words` bilden das leichtgewichtige Baseline-Set; in Kombination mit SHAP geeignet für schnelle Debug-Sessions.
 - **Numerische Features:** Für alle Sequenzmodelle stehen aktuell nur `seq_len`, `duration_sec`, `e_words_len`, `e_trigrams_len` zur Verfügung. Event-spezifische Felder wie `e_chars_len` existieren nicht im Sequenz-Parquet.
 
-> Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` zeigt alle Registry-Schlüssel. Ohne `--models` läuft das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) – alle Modelle arbeiten auf sequenzbasierten Token-Features.
+> Tipp: `python demo/lo2_e2e/LO2_samples.py --list-models` sowie `python demo/lo2_e2e/lo2_phase_f_explainability.py --list-models` zeigen alle Registry-Schlüssel. Ohne `--models` läuft das Default-Set (`event_lr_words,event_dt_trigrams,sequence_lr_numeric,sequence_shap_lr_words`) – alle Modelle arbeiten auf sequenzbasierten Token-Features.
 
 ## Phasenüberblick
 
@@ -74,7 +102,7 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 - **Phase C – Enhancer:** Wird automatisch in `LO2_samples.py` ausgeführt (Normalisierung, Tokens, Drain, Längen).
 - **Phase D – Isolation Forest:** Trainiert immer; Hold-out/Threshold per `--if-holdout-fraction`, `--if-threshold-percentile`.
 - **Phase E – Registry-Modelle:** `--models` schaltet zusätzliche Sequenzmodelle (supervised/unsupervised) zu.
-- **Phase F – Explainability:** `lo2_phase_f_explainability.py` generiert NN-Mapping, SHAP-Plots und False-Positive-Listen.
+- **Phase F – Explainability:** `lo2_phase_f_explainability.py` kann IF erneut antrainieren oder per `--skip-if` überspringen, supervised Modelle via `--sup-models`/`--sup-holdout-*` spiegelen und das NN-Mapping über `--nn-source` auf beliebige Registry-Keys legen.
 
 ## Wichtige CLI-Flags
 
@@ -82,7 +110,7 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 | --- | --- | --- |
 | Loader | `--root`, `--runs`, `--errors-per-run`, `--service-types`, `--save-parquet`, `--output-dir`, `--load-metrics` | Datenumfang und Persistenz |
 | Detector | `--phase`, `--if-*`, `--models`, `--list-models`, `--save-if`, `--save-model`, `--save-enhancers`, `--report-*`, `--metrics-dir`, `--dump-metadata` | Feature-Auswahl, Modellkonfiguration, Artefakte |
-| Explainability | `--if-*`, `--nn-top-k`, `--nn-normal-sample`, `--shap-sample`, `--root` | Sampling und Ausgabeort für XAI |
+| Explainability | `--if-*`, `--skip-if`, `--sup-models`, `--sup-holdout-*`, `--nn-source`, `--nn-top-k`, `--nn-normal-sample`, `--shap-sample`, `--predict-batch-size`, `--list-models`, `--root` | Sampling, Registry-Replays und Ausgabeort für XAI |
 
 ## Artefaktindex
 
@@ -95,6 +123,7 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 | `models/lo2_if.joblib` | LO2_samples (`--save-model`) | IsolationForest + Vectorizer |
 | `models/model.yml` | LO2_samples (`--dump-metadata`) | Parameter, Threshold, Git-Commit |
 | `demo/result/lo2/explainability/*` | Phase F | NN-Mapping, SHAP-Plots, FP-Liste |
+| `demo/result/lo2/explainability/<model>_predictions.parquet` | Phase F (`--sup-models`) | Modell-Outputs + Scores für Registry-Keys (inkl. `*_nn_mapping.csv`) |
 
 ## Persistenz & Wiederverwendung
 

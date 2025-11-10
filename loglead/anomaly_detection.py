@@ -1,5 +1,5 @@
 import time
-from inspect import isclass
+from inspect import isclass, signature
 
 import polars as pl
 import numpy as np
@@ -191,8 +191,19 @@ class AnomalyDetector:
     - Domain-specific detectors ``RarityModel`` and ``OOV_detector`` from ``loglead``.
     - ``polars.DataFrame`` inputs for sampling, feature extraction, and result emission.
     """
-    def __init__(self, item_list_col=None, numeric_cols=None, emb_list_col=None, label_col="anomaly", 
-                 store_scores=False, print_scores=True, auc_roc=False):
+    def __init__(
+        self,
+        item_list_col=None,
+        numeric_cols=None,
+        emb_list_col=None,
+        label_col="anomaly",
+        store_scores=False,
+        print_scores=True,
+        auc_roc=False,
+        vectorizer_kwargs=None,
+        random_state=42,
+        predict_batch_size=50000,
+    ):
         self.item_list_col = item_list_col
         self.numeric_cols = numeric_cols if numeric_cols else []
         self.label_col = label_col
@@ -203,6 +214,9 @@ class AnomalyDetector:
         self.train_vocabulary = None #TODO Is this used anywhere?
         self.auc_roc = auc_roc
         self.filter_anos = False
+        self.vectorizer_kwargs = vectorizer_kwargs.copy() if vectorizer_kwargs else {}
+        self.random_state = random_state
+        self.predict_batch_size = predict_batch_size
 
     def test_train_split(self, df, test_frac=0.9, shuffle=True, vectorizer_class=CountVectorizer):
         # Shuffle the DataFrame
@@ -259,108 +273,127 @@ class AnomalyDetector:
             labels = df_seq.select(pl.col(self.label_col)).to_series().to_list()
         else:
             labels = []
-            warnings.warn("WARNING! data has no labels. Only unsupervised methods will work.",
-                            category=UserWarning
-                            ) 
+            warnings.warn(
+                "WARNING! data has no labels. Only unsupervised methods will work.",
+                category=UserWarning,
+            )
         vectorizer = None
 
         # Extract events
         if self.item_list_col:
-            # Extract the column
-            dtype = df_seq.select(pl.col(self.item_list_col)).dtypes[0]              
+            dtype = df_seq.select(pl.col(self.item_list_col)).dtypes[0]
             events = df_seq.select(pl.col(self.item_list_col)).to_series().to_list()
-            # We are training because vectorizer is a class
-#            if train:
             if isinstance(vectorizer_class, type):
-                # Check the datatype  
-                if dtype  == pl.datatypes.Utf8: #We get strs -> Use SKlearn Tokenizer
-                    vectorizer = vectorizer_class() 
-                elif dtype  == pl.datatypes.List(pl.datatypes.Utf8): #We get list of str, e.g. words -> Do not use Skelearn Tokinizer 
-                    vectorizer = vectorizer_class(analyzer=self.identity_function)
+                base_kwargs = {
+                    "dtype": np.float32,
+                    "binary": True,
+                    "strip_accents": "unicode",
+                }
+                base_kwargs.update(self.vectorizer_kwargs)
+                if dtype == pl.datatypes.List(pl.datatypes.Utf8):
+                    base_kwargs.setdefault("analyzer", self.identity_function)
+                elif dtype != pl.datatypes.Utf8:
+                    raise ValueError(
+                        f"Error: Unsupported datatype {dtype}. Supported types are: Utf8, List[Utf8]"
+                    )
                 else:
-                    raise ValueError(f"Error: Unsupported datatype {dtype}. Supported types are: Utf8, List[Utf8]")
+                    base_kwargs.pop("analyzer", None)
+                vectorizer = vectorizer_class(**base_kwargs)
                 X = vectorizer.fit_transform(events)
-                self.train_vocabulary = vectorizer.vocabulary_ #Needed?
-            # We are predicting because vectorizer_class is instance of the previously created vectorizer. 
-            elif isinstance(vectorizer_class, object):
-                  vectorizer = vectorizer_class
-                  X = vectorizer.transform(events)
+                self.train_vocabulary = getattr(vectorizer, "vocabulary_", None)
+            elif vectorizer_class is not None:
+                vectorizer = vectorizer_class
+                X = vectorizer.transform(events)
 
         # Extract lists of embeddings
-        if  self.emb_list_col:
+        if self.emb_list_col:
             emb_list = df_seq.select(pl.col(self.emb_list_col)).to_series().to_list()
-            
-            # Convert lists of floats to a matrix
-            #emb_matrix = np.array(emb_list)
-            emb_matrix = np.vstack(emb_list)
-            # Stack with X
+            emb_matrix = np.vstack(emb_list).astype(np.float32, copy=False)
             X = hstack([X, emb_matrix]) if X is not None else emb_matrix
 
         # Extract additional predictors
         if self.numeric_cols:
-            additional_features = df_seq.select(self.numeric_cols).to_pandas().values
-            X = hstack([X, additional_features]) if X is not None else additional_features
+            numeric_df = df_seq.select(self.numeric_cols).with_columns([
+                pl.all().cast(pl.Float32)
+            ])
+            numeric_values = numeric_df.to_pandas().values.astype(np.float32, copy=False)
+            X = hstack([X, numeric_values]) if X is not None else numeric_values
 
-        return X, labels, vectorizer    
-        
-    def train_model(self, model,  /, *, filter_anos=False, **model_kwargs):
+        return X, labels, vectorizer
+
+    def train_model(self, model,  /, *, filter_anos=False, fit_kwargs=None, **model_kwargs):
         X_train_to_use = self.X_train_no_anos if filter_anos else self.X_train
-        #Store the current the model and whether it uses ano data or no
         if isclass(model):
-            self.model = model(**model_kwargs)
+            if "random_state" not in model_kwargs:
+                model_kwargs["random_state"] = self.random_state
+            try:
+                self.model = model(**model_kwargs)
+            except TypeError as exc:
+                if "random_state" in model_kwargs and "random_state" in str(exc):
+                    model_kwargs.pop("random_state", None)
+                    self.model = model(**model_kwargs)
+                else:
+                    raise
         else:
             self.model = model  # Backwards compatibility with previous implementation
         self.filter_anos = filter_anos
-        self.model.fit(X_train_to_use, self.labels_train)
+        fit_kwargs = fit_kwargs or {}
+        self.model.fit(X_train_to_use, self.labels_train, **fit_kwargs)
 
     def predict(self, custom_plot=False):
-        #Binary scores
         X_test_to_use = self.X_test_no_anos if self.filter_anos else self.X_test
-        predictions = self.model.predict(X_test_to_use)
-        #Unsupervised modeles give predictions between -1 and 1. Convert to 0 and 1
-        if isinstance(self.model, (IsolationForest, LocalOutlierFactor,KMeans, OneClassSVM)):
+        predictions = self._batched_call(self.model.predict, X_test_to_use)
+        if isinstance(self.model, (IsolationForest, LocalOutlierFactor, KMeans, OneClassSVM)):
             predictions = np.where(predictions < 0, 1, 0)
         df_seq = self.test_df.with_columns(pl.Series(name="pred_ano", values=predictions.tolist()))
-        
-        #Continuous scores
+
         predictions_proba = None
         if self.auc_roc:
             if isinstance(self.model, (IsolationForest, LocalOutlierFactor, OneClassSVM)):
-                # Unsupervised models give anomaly scores or decision function values
-                predictions_proba = 1- self.model.decision_function(X_test_to_use)
-            elif isinstance(self.model, (KMeans)):
+                predictions_proba = 1 - self.model.decision_function(X_test_to_use)
+            elif isinstance(self.model, KMeans):
                 from sklearn.metrics.pairwise import pairwise_distances
-                predictions_proba = np.min(pairwise_distances(X_test_to_use, self.model.cluster_centers_), axis=1)
+
+                predictions_proba = np.min(
+                    pairwise_distances(X_test_to_use, self.model.cluster_centers_), axis=1
+                )
             elif isinstance(self.model, LinearSVC):
-                # LinearSVC does not have predict_proba method by default
-                # Use decision_function method to obtain confidence scores
-                # and convert them to probabilities using Platt scaling
                 from sklearn.calibration import CalibratedClassifierCV
-                X_train_to_use = self.X_train_no_anos if  self.filter_anos else self.X_train
-                calibrated_model = CalibratedClassifierCV(self.model, cv='prefit')
+
+                X_train_to_use = self.X_train_no_anos if self.filter_anos else self.X_train
+                calibrated_model = CalibratedClassifierCV(self.model, cv="prefit")
                 calibrated_model.fit(X_train_to_use, self.labels_train)
                 predictions_proba = calibrated_model.predict_proba(X_test_to_use)[:, 1]
             elif isinstance(self.model, (OOV_detector, RarityModel)):
-                predictions_proba = self.model.scores    
+                predictions_proba = self.model.scores
             else:
-                # Supervised models give probabilities using predict_proba method
-                predictions_proba = self.model.predict_proba(X_test_to_use)[:, 1]
-            df_seq = self.test_df.with_columns(pl.Series(name="pred_ano_proba", values=predictions_proba.tolist()))      
+                raw = self._batched_call(self.model.predict_proba, X_test_to_use)
+                predictions_proba = raw[:, 1] if raw.ndim > 1 else raw
+            df_seq = self.test_df.with_columns(
+                pl.Series(name="pred_ano_proba", values=predictions_proba.tolist())
+            )
 
         if self.print_scores:
-            self._print_evaluation_scores(self.labels_test, predictions,predictions_proba, self.model)
+            self._print_evaluation_scores(self.labels_test, predictions, predictions_proba, self.model)
         if custom_plot:
             self.model.custom_plot(self.labels_test)
         if self.store_scores:
-            self.storage.store_test_results(self.labels_test, predictions,predictions_proba, type(self.model).__name__, 
-                                            self.item_list_col, self.numeric_cols, self.emb_list_col)
-        return df_seq 
-       
+            self.storage.store_test_results(
+                self.labels_test,
+                predictions,
+                predictions_proba,
+                type(self.model).__name__,
+                self.item_list_col,
+                self.numeric_cols,
+                self.emb_list_col,
+            )
+        return df_seq
+
     def train_LR(self, max_iter=4000, tol=0.0003):
         self.train_model(LogisticRegression, max_iter=max_iter, tol=tol)
     
-    def train_DT(self):
-        self.train_model(DecisionTreeClassifier)
+    def train_DT(self, **model_kwargs):
+        self.train_model(DecisionTreeClassifier, **model_kwargs)
 
     def train_LSVM(self, penalty='l1', tol=0.1, C=1, dual=False, class_weight=None, max_iter=4000):
         self.train_model(LinearSVC, penalty=penalty, tol=tol, C=C, dual=dual, class_weight=class_weight,
@@ -369,6 +402,23 @@ class AnomalyDetector:
     def train_IsolationForest(self, n_estimators=100,  max_samples='auto', contamination="auto",filter_anos=False):
         self.train_model(IsolationForest, filter_anos=filter_anos,
                          n_estimators=n_estimators, max_samples=max_samples, contamination=contamination)
+
+    def _batched_call(self, func, matrix):
+        batch_size = self.predict_batch_size or 0
+        if batch_size <= 0:
+            return func(matrix)
+        results = []
+        total = matrix.shape[0]
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            results.append(func(matrix[start:end]))
+        first = results[0]
+        if isinstance(first, np.ndarray):
+            try:
+                return np.concatenate(results, axis=0)
+            except Exception:
+                pass
+        return np.asarray(results, dtype=np.float32).reshape(-1)
                           
     def train_LOF(self, n_neighbors=20, contamination="auto", filter_anos=True):
         #LOF novelty=True model needs to be trained without anomalies
@@ -383,11 +433,19 @@ class AnomalyDetector:
     def train_OneClassSVM(self):
         self.train_model(OneClassSVM, max_iter=1000)
 
-    def train_RF(self):
-        self.train_model(RandomForestClassifier)
+    def train_RF(self, **model_kwargs):
+        self.train_model(RandomForestClassifier, **model_kwargs)
 
-    def train_XGB(self):
-        self.train_model(XGBClassifier)
+    def train_XGB(self, **model_kwargs):
+        fit_signature = signature(XGBClassifier.fit)
+        allowed_fit_params = {
+            name for name in fit_signature.parameters if name not in {"self", "X", "y"}
+        }
+        fit_kwargs = {}
+        for key in list(model_kwargs.keys()):
+            if key in allowed_fit_params:
+                fit_kwargs[key] = model_kwargs.pop(key)
+        self.train_model(XGBClassifier, fit_kwargs=fit_kwargs, **model_kwargs)
 
     # stop
 
@@ -684,5 +742,3 @@ class _ModelResultsStorage:
                 print(f"Accuracy: {acc:.4f}")
             if score_type in ['f1', 'all']:
                 print(f"F1 Score: {f1:.4f}")
-
-

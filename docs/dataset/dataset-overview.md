@@ -41,6 +41,27 @@ Der LO2-Datensatz kombiniert Logs, Metriken und Traces des Light-OAuth2-Microser
 - **Testcases:** 54 pro Run (1 korrekt + 53 Fehler).
 - **Dateitypen:** `.log` (Service-Container), Locust-Logs (Ground Truth), optionale `.json`/`.csv` für Metriken/Traces.
 
+## Sequenz-Features (Enhanced Sequences)
+
+Die Pipeline materialisiert pro Sequenz ein angereichertes Feature-Set (`lo2_sequences_enhanced.parquet`). Die wichtigsten Spalten im Überblick:
+
+| Spalte | Typ | Beschreibung | Nutzen für Anomalieerkennung |
+| --- | --- | --- | --- |
+| `e_words` | List[Utf8] | Sequenzweite Worttokens aus `EventLogEnhancer.words()` | Primäre Eingabe für Bag-of-Words-Vektorisierer (`--if-item e_words`, `event_lr_words`, SHAP-Modelle) |
+| `e_words_len` | Int | Gesamtanzahl der Wörter einer Sequenz | Volumenmerkmal; hohe Abweichungen deuten auf ungewöhnliche Ablaufkomplexität hin |
+| `e_trigrams` | List[Utf8] | Zeichenbasierte 3-Gramme (`EventLogEnhancer.trigrams()`, danach Aggregation) | Robust gegen neue Schreibweisen und Case-Drift; alternative Token-Repräsentation |
+| `e_trigrams_len` | Int | Anzahl der Trigramme pro Sequenz | Ergänzendes Längenfeature für Modelle mit `--if-numeric` oder `sequence_lr_numeric` |
+| `e_event_drain_id` | List[Utf8] | Reihenfolge der Drain-Template-IDs aller Events | Sichtbarmachen ungewöhnlicher Templates oder Kontrollflussänderungen |
+| `seq_len` | Int | Anzahl der Events innerhalb einer Sequenz | Kernmerkmal für `sequence_lr_numeric`; optional im Isolation Forest (`--if-numeric`) |
+| `e_event_id_len` | Int | Alias zu `seq_len` für Legacy-Kompatibilität | Wird intern zur Harmonisierung älterer Pipelines verwendet |
+| `start_time` / `end_time` | Datetime | Frühester beziehungsweise spätester Zeitstempel | Basis für zeitliche Splits (`--if-holdout-fraction`) und Trendanalysen |
+| `duration` | Duration | Zeitspanne zwischen `start_time` und `end_time` | Manuelle Auswertung; dient als Rohwert für `duration_sec` |
+| `duration_sec` | Float | Dauer in Sekunden | Direktes numerisches Feature für Performance- oder Delay-Anomalien |
+
+> Hinweis: `SequenceEnhancer.tokens(token="...")` erzeugt sowohl die Tokenlisten als auch die dazugehörigen `_len`-Spalten. Mehrfaches Aufrufen (z. B. für Wörter und Trigramme) liefert parallele Repräsentationen derselben Sequenz.
+
+**Praxis:** `demo/lo2_e2e/LO2_samples.py` nutzt standardmäßig `e_words` als Item-Feature und kombiniert `seq_len`, `duration_sec`, `e_words_len`, `e_trigrams_len` als numerische Zusatzsignale. Dadurch fließen sowohl semantische (Token) als auch strukturelle Merkmale (Länge, Dauer) in die Anomalieerkennung ein.
+
 ## Flow-Abdeckung (Hypothesen)
 
 | Flow | Primäre Endpoints | Genutzte Logs | Bemerkung |

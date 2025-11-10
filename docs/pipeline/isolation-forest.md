@@ -1,7 +1,7 @@
 ---
 title: Isolation-Forest Leitfaden
 summary: Training, Schwellenkalibrierung und aktueller Verbesserungsplan für den LO2 Isolation Forest.
-last_updated: 2025-11-05
+last_updated: 2025-11-10
 ---
 
 # Isolation-Forest Leitfaden
@@ -62,6 +62,12 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
 - `models/model.yml`: Metadaten (Parameter, Schwelle, Datasetgröße, Git-Commit).
 - `metrics/*.json`: Precision@k, FP-Rate, PSI, optional PR/ROC-Kurven (abhängig von Flags).
 - Explainability-Ausgaben (`if_nn_mapping.csv`, `if_false_positives.txt`, `lr_shap_*.png`, `dt_shap_*.png`).
+
+## Runtime-Telemetrie
+
+- `LO2_samples.py` gibt nach jedem Isolation-Forest-Lauf eine Zeile `[Resource] if_baseline: ...` aus.
+- Enthalten sind u. a. Trainingsdauer, Feature-Anzahl, Vokabulargröße, Modellgröße sowie (sofern bekannt) Tree-Statistiken.
+- Beim Laden eines bestehenden Bundles bleibt die Dauer `0.00s`, die übrigen Werte helfen dennoch beim Monitoring.
 
 ## Beobachtungen aus den letzten Runs
 

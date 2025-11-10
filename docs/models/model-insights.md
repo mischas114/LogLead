@@ -1,12 +1,20 @@
 ---
 title: Modellbefunde & Metriken
 summary: Aktueller Stand der Modellbewertungen inklusive bekannter Einschränkungen.
-last_updated: 2025-11-05
+last_updated: 2025-11-10
 ---
 
 # Modellbefunde & Metriken
 
 Die bisherigen Läufe konzentrieren sich auf drei Konfigurationen: Supervised-Sequenzmodelle auf Token-Features, unsupervised Sequenzmodelle und numerische Sequenzmodelle. Supervised-Varianten nutzen jetzt standardmäßig einen run-basierten Hold-out (20 %), während die unsupervised Modelle weiterhin auf dem Volltraining basieren.
+
+## Trainings-Telemetrie & Guards (Nov 2025)
+
+- Alle Modelle aus `MODEL_REGISTRY` erhalten beim Fit eine `[Resource <model>]`-Zeile (`time`, Featureanzahl, Vokabulargröße, Modellgröße, Tree-Statistiken).
+- IsolationForest (`if_baseline`) liefert dieselbe Ausgabe; Laden eines Bundles setzt `time=0.00s`.
+- Speicher-Guards erzwingen konservative Defaults (max_depth ≤20, vocab ≤100 000, n_estimators ≤300) und reagieren dynamisch auf knappen RAM.
+- Vektorisierung, Trainingsalgorithmen und Vorhersagen nutzen konsistente Seeds sowie Batch-Prediction (`predict_batch_size` CLI-Flag) zur Begrenzung von Peaks.
+- CLI-Flags `--disable-memory-guard` und `--predict-batch-size` erlauben Notfall-Overrides, sollten aber nur nach Ressourcenprüfung eingesetzt werden.
 
 ## Aktueller Benchmark (50 % Anomalien, Hold-out 20 %)
 
