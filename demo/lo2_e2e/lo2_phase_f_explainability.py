@@ -19,16 +19,21 @@ from typing import Iterable
 import matplotlib
 
 matplotlib.use("Agg")  # Headless plot generation
-import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
-import shap
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 import joblib
 
 from loglead import AnomalyDetector
 from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
 from loglead.explainer import NNExplainer, ShapExplainer
+from loglead.explainability_utils import (
+    plot_shap,
+    save_top_features,
+    to_dense,
+    vectorizer_with_defaults,
+    write_lines,
+)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -41,13 +46,7 @@ from LO2_samples import (
     _run_based_holdout_split,
     _detect_available_ram_gb,
 )
-VECTOR_KWARGS = {
-    "max_features": 5000,
-    "min_df": 5,
-    "binary": True,
-    "dtype": np.float32,
-    "strip_accents": "unicode",
-}
+VECTOR_KWARGS = vectorizer_with_defaults({"max_features": 5000, "min_df": 5})
 
 DT_TRAIN_KWARGS = {
     "max_depth": 8,
@@ -61,6 +60,16 @@ DT_TRAIN_KWARGS = {
 DEFAULT_PREDICT_BATCH_SIZE = BASE_PREDICT_BATCH_SIZE
 SHAP_CAPABLE_METHODS = {"train_LR", "train_DT", "train_RF", "train_XGB", "train_LSVM"}
 RUN_DT_BASELINE = False
+SHAP_GUARD_HINT = "Passe --shap-background, --shap-feature-threshold oder --shap-cell-threshold an, um mehr Beispiele zuzulassen."
+
+
+def format_shap_limits(config: dict | None) -> str:
+    cfg = config or {}
+    return (
+        f"background={cfg.get('background_sample_size') or 'full'} | "
+        f"feature_threshold={cfg.get('feature_warning_threshold') or 'off'} | "
+        f"cell_threshold={cfg.get('sample_warning_threshold') or 'off'}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +102,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Maximale Anzahl Beispiele für die SHAP-Berechnung (0 = keine Begrenzung).",
+    )
+    parser.add_argument(
+        "--shap-background",
+        type=int,
+        default=256,
+        help="Anzahl Hintergrundsequenzen für die SHAP-Erklärung (≤0 nutzt den gesamten Trainingssplit).",
+    )
+    parser.add_argument(
+        "--shap-feature-threshold",
+        type=int,
+        default=2000,
+        help="Stoppt SHAP bei zu großer Feature-Dimension (≤0 deaktiviert den Guard).",
+    )
+    parser.add_argument(
+        "--shap-cell-threshold",
+        type=int,
+        default=2_000_000,
+        help="Stoppt SHAP, wenn Zeilen×Features diesen Wert überschreiten (≤0 deaktiviert den Guard).",
     )
     parser.add_argument(
         "--nn-top-k",
@@ -174,18 +201,8 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def to_dense(matrix: np.ndarray) -> np.ndarray:
-    if hasattr(matrix, "toarray"):
-        return matrix.toarray()
-    return matrix
-
-
 def save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def write_lines(path: Path, lines: Iterable[str]) -> None:
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def attach_row_ids(df: pl.DataFrame) -> pl.DataFrame:
@@ -229,7 +246,7 @@ def explain_detector_with_shap(
     sample_size: int,
     shap_kwargs: dict | None = None,
 ) -> tuple[int, int]:
-    shap_kwargs = shap_kwargs or {}
+    shap_kwargs = dict(shap_kwargs or {})
     shap_expl = ShapExplainer(detector, **shap_kwargs)
     total = detector.X_test.shape[0]
     size = total if sample_size <= 0 else min(sample_size, total)
@@ -252,6 +269,7 @@ def train_registry_models(
     holdout_shuffle: bool,
     available_ram_gb: float | None,
     memory_guard_enabled: bool,
+    shap_config: dict | None,
 ) -> dict[str, dict]:
     results: dict[str, dict] = {}
     if not model_keys:
@@ -352,8 +370,10 @@ def train_registry_models(
         shap_total = pred_df.height
         shap_supported = spec.get("requires_shap") or spec.get("train_method") in SHAP_CAPABLE_METHODS
         if shap_supported:
+            guard_limits = shap_config or {}
             try:
-                shap_kwargs = spec.get("shap_kwargs", {})
+                shap_kwargs = dict(guard_limits)
+                shap_kwargs.update(spec.get("shap_kwargs", {}))
                 shap_used, shap_total = explain_detector_with_shap(
                     detector,
                     model_key,
@@ -362,6 +382,19 @@ def train_registry_models(
                     shap_kwargs=shap_kwargs,
                 )
                 print(f"[INFO] {model_key} SHAP samples: {shap_used} von {shap_total}")
+            except ResourceWarning as guard_exc:
+                shap_used = 0
+                guard_note = out_dir / f"{model_key}_shap_guard.txt"
+                limits_text = format_shap_limits(guard_limits)
+                write_lines(
+                    guard_note,
+                    [
+                        f"SHAP abgebrochen: {guard_exc}",
+                        f"Aktuelle Limits: {limits_text}",
+                        SHAP_GUARD_HINT,
+                    ],
+                )
+                print(f"[WARN:{model_key}] SHAP-Guard ausgelöst: {guard_exc}")
             except Exception as exc:
                 shap_used = 0
                 print(f"[WARN:{model_key}] SHAP-Erzeugung fehlgeschlagen: {exc}")
@@ -600,36 +633,12 @@ def compute_metrics(sad: AnomalyDetector) -> dict:
     return metrics
 
 
-def save_top_features(explainer: ShapExplainer, limit: int, out_path: Path) -> None:
-    feature_names = explainer.sorted_featurenames()[:limit]
-    write_lines(out_path, [f"{idx+1}. {name}" for idx, name in enumerate(feature_names)])
-
-
-def plot_shap(explainer: ShapExplainer, out_prefix: Path) -> None:
-    shap_vals = explainer.Svals
-    data = explainer.shapdata
-    dense_data = to_dense(data)
-
-    summary_path = out_prefix.parent / f"{out_prefix.name}_summary.png"
-    if hasattr(shap_vals, "values"):
-        shap.summary_plot(shap_vals, show=False, max_display=20)
-    else:
-        shap.summary_plot(shap_vals, dense_data, show=False, max_display=20)
-    plt.tight_layout()
-    plt.savefig(summary_path, dpi=200)
-    plt.close()
-    print(f"[INFO] SHAP Summary Plot: {summary_path}")
-
-    bar_path = out_prefix.parent / f"{out_prefix.name}_bar.png"
-    shap.plots.bar(shap_vals, max_display=20, show=False)
-    plt.tight_layout()
-    plt.savefig(bar_path, dpi=200)
-    plt.close()
-    print(f"[INFO] SHAP Bar Plot: {bar_path}")
-
-
 def run_sequence_lr_tokens_shap(
-    df_seq: pl.DataFrame, out_dir: Path, sample_size: int, predict_batch_size: int
+    df_seq: pl.DataFrame,
+    out_dir: Path,
+    sample_size: int,
+    predict_batch_size: int,
+    shap_config: dict | None,
 ) -> tuple[dict | None, int, int]:
     if "e_words" not in df_seq.columns:
         print("[INFO] e_words nicht vorhanden – LR-SHAP (Tokens) übersprungen.")
@@ -646,21 +655,40 @@ def run_sequence_lr_tokens_shap(
     sad.prepare_train_test_data()
     sad.train_LR()
     _ = sad.predict()
-
-    shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    total = sad.X_test.shape[0]
-    size = total if sample_size <= 0 else min(sample_size, total)
-    shap_expl.calc_shapvalues(custom_slice=slice(0, size))
-    save_top_features(shap_expl, 20, out_dir / "seq_lr_tokens_top_features.txt")
-    plot_shap(shap_expl, out_dir / "seq_lr_tokens_shap")
     metrics = compute_metrics(sad)
     save_json(out_dir / "metrics_seq_lr_tokens.json", metrics)
+
+    shap_kwargs = dict(shap_config or {})
+    shap_kwargs.setdefault("plot_featurename_len", 18)
+    shap_expl = ShapExplainer(sad, **shap_kwargs)
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
+    try:
+        shap_expl.calc_shapvalues(custom_slice=slice(0, size))
+    except ResourceWarning as guard_exc:
+        note_path = out_dir / "seq_lr_tokens_shap_skipped.txt"
+        write_lines(
+            note_path,
+            [
+                f"Sequence LR (Tokens) SHAP abgebrochen: {guard_exc}",
+                f"Aktuelle Limits: {format_shap_limits(shap_config)}",
+                SHAP_GUARD_HINT,
+            ],
+        )
+        print(f"[WARN] Sequence LR (Tokens): SHAP-Guard ausgelöst ({guard_exc})")
+        return metrics, 0, total
+    save_top_features(shap_expl, 20, out_dir / "seq_lr_tokens_top_features.txt")
+    plot_shap(shap_expl, out_dir / "seq_lr_tokens_shap")
     print(f"[Explainability] Sequence LR (Tokens) SHAP samples: {size} of {total} (requested {sample_size})")
     return metrics, size, total
 
 
 def run_sequence_dt_shap(
-    df_seq: pl.DataFrame, out_dir: Path, sample_size: int, predict_batch_size: int
+    df_seq: pl.DataFrame,
+    out_dir: Path,
+    sample_size: int,
+    predict_batch_size: int,
+    shap_config: dict | None,
 ) -> tuple[dict | None, int, int]:
     if "e_trigrams" not in df_seq.columns:
         print("[INFO] e_trigrams nicht vorhanden – Decision-Tree-SHAP übersprungen.")
@@ -677,21 +705,40 @@ def run_sequence_dt_shap(
     sad.prepare_train_test_data()
     sad.train_DT(**DT_TRAIN_KWARGS)
     _ = sad.predict()
-
-    shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    total = sad.X_test.shape[0]
-    size = total if sample_size <= 0 else min(sample_size, total)
-    shap_expl.calc_shapvalues(custom_slice=slice(0, size))
-    save_top_features(shap_expl, 20, out_dir / "seq_dt_top_trigrams.txt")
-    plot_shap(shap_expl, out_dir / "seq_dt_shap")
     metrics = compute_metrics(sad)
     save_json(out_dir / "metrics_seq_dt.json", metrics)
+
+    shap_kwargs = dict(shap_config or {})
+    shap_kwargs.setdefault("plot_featurename_len", 18)
+    shap_expl = ShapExplainer(sad, **shap_kwargs)
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
+    try:
+        shap_expl.calc_shapvalues(custom_slice=slice(0, size))
+    except ResourceWarning as guard_exc:
+        note_path = out_dir / "seq_dt_shap_skipped.txt"
+        write_lines(
+            note_path,
+            [
+                f"Sequence DT SHAP abgebrochen: {guard_exc}",
+                f"Aktuelle Limits: {format_shap_limits(shap_config)}",
+                SHAP_GUARD_HINT,
+            ],
+        )
+        print(f"[WARN] Sequence DT: SHAP-Guard ausgelöst ({guard_exc})")
+        return metrics, 0, total
+    save_top_features(shap_expl, 20, out_dir / "seq_dt_top_trigrams.txt")
+    plot_shap(shap_expl, out_dir / "seq_dt_shap")
     print(f"[Explainability] Sequence DT SHAP samples: {size} of {total} (requested {sample_size})")
     return metrics, size, total
 
 
 def run_sequence_lr_numeric_shap(
-    df_seq: pl.DataFrame, out_dir: Path, sample_size: int, predict_batch_size: int
+    df_seq: pl.DataFrame,
+    out_dir: Path,
+    sample_size: int,
+    predict_batch_size: int,
+    shap_config: dict | None,
 ) -> tuple[dict | None, int, int]:
     required_cols = [col for col in ["seq_len", "duration_sec"] if col in df_seq.columns]
     if not required_cols:
@@ -712,22 +759,25 @@ def run_sequence_lr_numeric_shap(
     metrics = compute_metrics(sad)
     save_json(out_dir / "metrics_seq_lr_numeric.json", metrics)
 
-    if sad.vec is None:
+    shap_kwargs = dict(shap_config or {})
+    shap_kwargs.setdefault("plot_featurename_len", 18)
+    shap_expl = ShapExplainer(sad, **shap_kwargs)
+    total = sad.X_test.shape[0]
+    size = total if sample_size <= 0 else min(sample_size, total)
+    try:
+        shap_expl.calc_shapvalues(custom_slice=slice(0, size))
+    except ResourceWarning as guard_exc:
         note_path = out_dir / "seq_lr_numeric_shap_skipped.txt"
         write_lines(
             note_path,
             [
-                "SHAP wurde übersprungen, weil das Sequence-LR-Modell nur numerische Features nutzt",
-                "und daher kein Vectorizer mit Feature-Namen vorhanden ist.",
+                f"Sequence LR (numeric) SHAP abgebrochen: {guard_exc}",
+                f"Aktuelle Limits: {format_shap_limits(shap_config)}",
+                SHAP_GUARD_HINT,
             ],
         )
-        print(f"[INFO] Sequence-LR (numeric) SHAP übersprungen; Hinweis unter {note_path}")
-        return metrics, 0, sad.X_test.shape[0]
-
-    shap_expl = ShapExplainer(sad, ignore_warning=True, plot_featurename_len=18)
-    total = sad.X_test.shape[0]
-    size = total if sample_size <= 0 else min(sample_size, total)
-    shap_expl.calc_shapvalues(custom_slice=slice(0, size))
+        print(f"[WARN] Sequence LR (numeric): SHAP-Guard ausgelöst ({guard_exc})")
+        return metrics, 0, total
     save_top_features(shap_expl, 20, out_dir / "seq_lr_numeric_top_features.txt")
     plot_shap(shap_expl, out_dir / "seq_lr_numeric_shap")
     print(f"[Explainability] Sequence LR (numeric) SHAP samples: {size} of {total} (requested {sample_size})")
@@ -759,10 +809,16 @@ def main() -> None:
 
     available_ram_gb = _detect_available_ram_gb()
     memory_guard_enabled = not args.disable_memory_guard
+    shap_config = {
+        "background_sample_size": args.shap_background if args.shap_background > 0 else None,
+        "feature_warning_threshold": args.shap_feature_threshold if args.shap_feature_threshold > 0 else None,
+        "sample_warning_threshold": args.shap_cell_threshold if args.shap_cell_threshold > 0 else None,
+    }
     if available_ram_gb is not None:
         print(f"[Guard] Verfügbare RAM (ca.): {available_ram_gb:.1f} GB")
     elif memory_guard_enabled:
         print("[Guard] psutil nicht verfügbar – Ressourcen-Guards verwenden Standardlimits.")
+    print(f"[Guard] SHAP Konfiguration: {format_shap_limits(shap_config)}")
 
     if args.skip_if and nn_source == "if":
         if selected_models:
@@ -798,7 +854,7 @@ def main() -> None:
 
     print("[INFO] Berechne SHAP für Sequence-LR (Tokens) …")
     lr_metrics, lr_shap_used, lr_total = run_sequence_lr_tokens_shap(
-        df_seq, out_dir, args.shap_sample, args.predict_batch_size
+        df_seq, out_dir, args.shap_sample, args.predict_batch_size, shap_config
     )
     if lr_metrics:
         print(f"[INFO] Sequence-LR (Tokens) Metriken: {lr_metrics}")
@@ -806,7 +862,7 @@ def main() -> None:
     if RUN_DT_BASELINE:
         print("[INFO] Berechne SHAP für Sequence-Decision-Tree …")
         dt_metrics, dt_shap_used, dt_total = run_sequence_dt_shap(
-            df_seq, out_dir, args.shap_sample, args.predict_batch_size
+            df_seq, out_dir, args.shap_sample, args.predict_batch_size, shap_config
         )
         if dt_metrics:
             print(f"[INFO] Sequence-DT Metriken: {dt_metrics}")
@@ -815,7 +871,7 @@ def main() -> None:
         print("[INFO] Sequence-Decision-Tree SHAP übersprungen (RUN_DT_BASELINE=False).")
 
     seq_num_metrics, seq_num_shap_used, seq_num_total = run_sequence_lr_numeric_shap(
-        df_seq, out_dir, args.shap_sample, args.predict_batch_size
+        df_seq, out_dir, args.shap_sample, args.predict_batch_size, shap_config
     )
     if seq_num_metrics:
         print(f"[INFO] Sequence-LR (numeric) Metriken: {seq_num_metrics}")
@@ -832,6 +888,7 @@ def main() -> None:
         holdout_shuffle=args.sup_holdout_shuffle,
         available_ram_gb=available_ram_gb,
         memory_guard_enabled=memory_guard_enabled,
+        shap_config=shap_config,
     )
 
     if nn_source == "if":

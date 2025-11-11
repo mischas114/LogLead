@@ -153,12 +153,18 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
   --nn-source sequence_shap_lr_words \
   --nn-top-k 50 \
   --shap-sample 200 \
+  --shap-background 256 \
+  --shap-feature-threshold 2000 \
+  --shap-cell-threshold 2000000 \
   --sup-holdout-fraction 0.2
 ```
 
 - `MPLBACKEND=Agg` verhindert GUI-Abhängigkeiten und ermöglicht headless SHAP-Plots.
 - Entferne `--skip-if`, wenn du den Isolation Forest in Phase F erneut trainieren willst (z. B. mit anderen Parametern).
 - Mit `--nn-source` steuerst du, welches Modell für das Nearest-Neighbour-Mapping genutzt wird (`if`, `sequence_shap_lr_words`, …).
+- `--shap-background` bestimmt, wie viele Sequenzen als Hintergrundverteilung für SHAP genutzt werden (Standard 256, `0` = komplettes Training).
+- `--shap-feature-threshold` und `--shap-cell-threshold` schützen vor unhandlich großen SHAP-Matrizen. Hebe die Werte an, wenn ein Guard greift.
+- Tree-basierte Modelle (RandomForest, XGBoost, IsolationForest) laufen automatisch über `shap.TreeExplainer`, lineare Modelle über `shap.LinearExplainer`. Für nicht unterstützte Modelle legt das Skript eine Hinweisdatei im Explainability-Ordner ab.
 
 ## 6. Erwartete Artefakte
 

@@ -55,6 +55,12 @@ In the following demonstrations, you'll notice a significant aspect of LogLead's
 - **Anomaly Labels**: Provided in a separate file.
 - **Dataset**: The demo includes a parquet file containing a subset of 222,579 log events, forming 11,501 sequences with 350 anomalies.
 
+### LO2 Explainability (Phase F)
+
+- Use `demo/lo2_e2e/lo2_phase_f_explainability.py` once the LO2 sequences are prepared. The helper now shares vectorizer defaults, SHAP plotting, and dense conversions with the main LO2 pipeline to prevent configuration drift.
+- New guard rails keep explainability lightweight: `--shap-background` controls how many train rows form the SHAP background (default `256`), while `--shap-feature-threshold`/`--shap-cell-threshold` stop oversized runs (set them to `0` to disable). When a guard triggers the script writes a note explaining which flag to adjust.
+- NNExplainer mappings are built lazily, so you can plug in an ANN backend without recomputing unless `mapping` is accessed. Tree models (RandomForest, IsolationForest, XGBoost) automatically route through `shap.TreeExplainer`, whereas linear models stick to the linear backend; unsupported estimators drop a `_shap_skipped` file in `demo/result/lo2/explainability`.
+
 ## Example of Anomaly Detection results
 Below you can see anomaly detection results (F1-Binary) trained on 0.5% subset of HDFS data. 
 We use 5 different log message enhancement strategies: [Words](https://en.wikipedia.org/wiki/Bag-of-words_model), [Drain](https://github.com/logpai/Drain3), [LenMa](https://github.com/keiichishima/templateminer), [Spell](https://github.com/logpai/logparser/tree/main/logparser/Spell), and [BERT](https://github.com/google-research/bert) 

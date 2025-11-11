@@ -20,6 +20,7 @@ import polars as pl
 from loglead import AnomalyDetector
 from loglead.enhancers import EventLogEnhancer, SequenceEnhancer
 import loglead.explainer as ex
+from loglead.explainability_utils import DEFAULT_VECTORIZER_KWARGS
 import joblib
 import numpy as np
 from sklearn.metrics import accuracy_score
@@ -50,15 +51,7 @@ HARD_LIMITS = {
     "max_leaves": 512,
 }
 
-VECTORIZER_DEFAULTS = {
-    "dtype": np.float32,
-    "binary": True,
-    "strip_accents": "unicode",
-    "max_df": 0.9,
-    "min_df": 2,
-    "max_features": 100_000,
-}
-
+VECTORIZER_DEFAULTS = DEFAULT_VECTORIZER_KWARGS
 DEFAULT_PREDICT_BATCH_SIZE = 50_000
 
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {

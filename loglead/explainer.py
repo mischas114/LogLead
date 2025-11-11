@@ -1,10 +1,14 @@
+from __future__ import annotations
+
+from typing import Callable
+
 from sklearn.metrics.pairwise import cosine_similarity
 import polars as pl
 import numpy as np
 import umap
 import plotly.express as px
 
-import shap 
+import shap
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import LinearSVC
@@ -12,47 +16,128 @@ from sklearn.ensemble import IsolationForest
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
-class NNExplainer:
-    """A class for explaining the anomaly detection results using nearest neighbour search.
-    With the class the user can find the closest normal instance to each anomalous instance
-    in the vector space and visualize the instances in 2D UMAP space for further interactive
-    exploration.
-    """
-    def __init__(self, df: pl.DataFrame, X: np.ndarray, id_col: str, pred_col: str):
-        """Initializes the NNExplainer class with the given DataFrame, the feature matrix X,
-        the column name for the instance id, and the column name for the prediction result.
+from loglead.explainability_utils import to_dense
 
-        Args:
-            df (pl.DataFrame): The dataframe produced by the anomaly detection module.
-            X (np.ndarray): The feature matrix used for predicting the anomalies.
-            id_col (str): The column name of the instance id. Should be unique for each instance.
-            pred_col (str): The column name of the prediction result. Should be binary with 1 indicating an anomaly.
-        """
+class NNExplainer:
+    """Assistants for nearest-neighbour based explainability.
+
+    The LO2 workflow only needs a small slice of the prediction table for
+    explainability.  Computing the full NN mapping lazily avoids materialising
+    large cosine-similarity matrices until the caller explicitly asks for them.
+
+    Parameters
+    ----------
+    df:
+        Polars dataframe that contains predictions (`pred_col`) and unique ids.
+    X:
+        Feature matrix aligned with `df`.  Can be numpy arrays or sparse CSR
+        matrices.
+    backend:
+        Optional callable that receives `(anomalies, normals)` matrices and
+        returns the index of the closest normal row for every anomaly.  By
+        default cosine similarity is used, but this hook makes it trivial to
+        plug in FAISS/Annoy/HNSW backends.
+    auto_dense:
+        Densify sparse matrices before calling the default backend.  Set to
+        `False` when the provided backend operates on sparse inputs directly.
+    """
+
+    def __init__(
+        self,
+        df: pl.DataFrame,
+        X,
+        id_col: str,
+        pred_col: str,
+        *,
+        backend: Callable | None = None,
+        auto_dense: bool = True,
+    ) -> None:
         self.df = df
         self.X = X
         self.id_column = id_col
         self.prediction_column = pred_col
-        self.mapping = self._get_normal_mapping()
+        self.auto_dense = auto_dense
+        self._backend = backend
+        self._mapping: pl.DataFrame | None = None
 
+    def build_mapping(self, *, force: bool = False) -> pl.DataFrame:
+        """Compute (or recompute) the anomalous→normal lookup table."""
+        if self._mapping is None or force:
+            self._mapping = self._get_normal_mapping()
+        return self._mapping
+
+    @property
+    def mapping(self) -> pl.DataFrame:
+        """Expose the cached mapping while keeping the computation lazy."""
+        return self.build_mapping()
+
+    def clear_cache(self) -> None:
+        """Drop cached results so the mapping will be recomputed on demand."""
+        self._mapping = None
+
+    def _resolve_backend(self) -> Callable[[np.ndarray, np.ndarray], np.ndarray]:
+        if self._backend is None:
+            return self._cosine_backend
+        if callable(self._backend):
+            return self._backend
+        if hasattr(self._backend, "query"):
+            return getattr(self._backend, "query")
+        raise TypeError("NNExplainer backend must be callable or expose a 'query' method.")
+
+    def _prepare_matrix(self, matrix):
+        data = matrix
+        if self.auto_dense and hasattr(matrix, "toarray"):
+            data = matrix.toarray()
+        if isinstance(data, np.ndarray):
+            return data.astype(np.float32, copy=False)
+        if hasattr(data, "astype"):
+            return data.astype(np.float32)
+        return np.asarray(data, dtype=np.float32)
+
+    def _prediction_mask(self) -> np.ndarray:
+        series = self.df.select(pl.col(self.prediction_column)).to_series()
+        return np.asarray(series.to_list(), dtype=bool)
+
+    def _normalise_backend_output(self, output, max_index: int) -> np.ndarray:
+        if isinstance(output, tuple):
+            output = output[0]
+        if isinstance(output, list):
+            if output and isinstance(output[0], (list, tuple, np.ndarray)):
+                return np.asarray([row[0] for row in output], dtype=int)
+            return np.asarray(output, dtype=int)
+        arr = np.asarray(output)
+        if arr.ndim > 1:
+            arr = arr[:, 0]
+        arr = arr.astype(int, copy=False)
+        arr = np.atleast_1d(arr)
+        if arr.size:
+            arr = np.clip(arr, 0, max_index)
+        return arr
 
     def _get_normal_mapping(self) -> pl.DataFrame:
-        """Finds the closest normal instance (column indicating predictions set as False) to 
-        each anomalous instance (column indicating predictions set as True) and returns the
-        corresponding mapping as a Polars DataFrame with anomalous_id column indicating the
-        id of the anomalous instance and the normal_id column indicating the nearest instance 
-        to the anomalous instance in the vector space measured with cosine similarity.
+        mask = self._prediction_mask()
+        anomaly_idx = np.flatnonzero(mask)
+        normal_idx = np.flatnonzero(~mask)
 
-        Returns:
-            pl.DataFrame: The mapping of the anomalous instances to the nearest normal instances.
-        """
-        non_anomalous_ids = self.df.filter(pl.col(self.prediction_column) != 1).select(pl.col(self.id_column).alias("normal_id"))
-        non_anomalies = self.X[~self.df.select(pl.col(self.prediction_column)).to_series()]
-        anomalous_ids = self.df.filter(pl.col(self.prediction_column) == 1).select(pl.col(self.id_column).alias("anomalous_id"))
-        anomalies = self.X[self.df.select(pl.col(self.prediction_column)).to_series()]
-        similarities = cosine_similarity(anomalies, non_anomalies).argmax(axis=1)
-        similarity_mapping = pl.concat([anomalous_ids, non_anomalous_ids[similarities]], how="horizontal")
-        return similarity_mapping
+        if anomaly_idx.size == 0 or normal_idx.size == 0:
+            return pl.DataFrame({"anomalous_id": [], "normal_id": []})
 
+        anomalies = self._prepare_matrix(self.X[anomaly_idx])
+        normals = self._prepare_matrix(self.X[normal_idx])
+        backend = self._resolve_backend()
+        matches = backend(anomalies, normals)
+        matches = self._normalise_backend_output(matches, normal_idx.size - 1)
+
+        id_series = self.df.select(pl.col(self.id_column)).to_series().to_list()
+        anomaly_ids = [id_series[idx] for idx in anomaly_idx]
+        normal_ids = [id_series[idx] for idx in normal_idx]
+        matched_normals = [normal_ids[idx] for idx in matches]
+        return pl.DataFrame({"anomalous_id": anomaly_ids, "normal_id": matched_normals})
+
+    def _cosine_backend(self, anomalies: np.ndarray, normals: np.ndarray) -> np.ndarray:
+        """Default similarity backend operating on float32 dense matrices."""
+        sims = cosine_similarity(anomalies, normals)
+        return sims.argmax(axis=1)
 
     def print_log_content_from_nn_mapping(self) -> None:
         """Prints the log content of the anomalous and the closest normal instances in the mapping.
@@ -145,202 +230,248 @@ class NNExplainer:
 
 
 class ShapExplainer:
-    """A class for explaining the anomaly detection results using SHapley Additive exPlanations.
-    With the class the user can calculate the SHAP values for the features of the instances and
-    visualize the SHAP values in different plots to understand the importance of the features
-    in the anomaly detection model. The class currently supports the following anomaly detection
-    models: Logistic Regression, Linear Support Vector Classifier, Decision Tree Classifier,
-    Random Forest Classifier, Isolation Forest, and XGBoost Classifier.
-    """
-    def __init__(self, sad, ignore_warning=False, plot_featurename_len=16): 
-        """Initializes the ShapExplainer class with the given anomaly detection object. The anomaly
-        detection object should have the following attributes: model, X_train, X_test, and vectorizer.
+    """Resource-aware wrapper around SHAP explainers.
 
-        Args:
-            sad (AnomalyDetection): The anomaly detection object used for predicting the anomalies.
-            ignore_warning (bool, optional): Are warning about large dataset ignored. Defaults to False.
-            plot_featurename_len (int, optional): Sets the lenght of truncated featurename in plots. Defaults to 16.
+    The LO2 stack often runs in constrained CI environments, so this wrapper
+    keeps float32-friendly defaults, samples the SHAP background distribution
+    automatically, and exposes knobs for tightening the guardrails.
+    """
+
+    TREE_MODELS = (IsolationForest, DecisionTreeClassifier, RandomForestClassifier, XGBClassifier)
+
+    def __init__(
+        self,
+        sad,
+        *,
+        ignore_warning: bool = False,
+        plot_featurename_len: int = 16,
+        feature_warning_threshold: int = 1500,
+        sample_warning_threshold: int | None = None,
+        background_sample_size: int | None = 512,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        sad:
+            An ``AnomalyDetector`` instance (or compatible object) with ``model``,
+            ``X_train``/``X_test`` matrices and optional ``vectorizer`` / ``numeric_cols``.
+        ignore_warning:
+            Disable resource guardrails (not recommended for notebook usage).
+        plot_featurename_len:
+            Max length of feature labels in plots.
+        feature_warning_threshold:
+            Trigger a ``ResourceWarning`` once the number of features exceeds
+            this limit.
+        sample_warning_threshold:
+            Optional total-cell-count guard for the SHAP matrix.  Defaults to
+            ``feature_warning_threshold * 1000`` to mimic the legacy heuristic.
+        background_sample_size:
+            Number of rows sampled from the training set to form the SHAP
+            background distribution.  Set to ``None`` to use the whole dataset.
         """
         self.model = sad.model
         self.X_train = sad.X_train
         self.X_test = sad.X_test
-        self.vec = sad.vectorizer
-        self.warn = not ignore_warning # Should the program warn if large dataset
-        self.Svals = None # SHAP values
-        self.expl = None # Shap explainer
-        self.istree =  False # Do we have tree model
-        self.truncatelen = plot_featurename_len # variable for lengt of truncated name
-        self.func = self._scuffmapping() # Do the mapping of model in init
-        self.shapdata = None # Contains the data used to calc shapvalues
-        self.threshold = 1500 # How many features before warning, can be changed if needed
-        self.index = None # Sorted Indexes
+        self.vec = getattr(sad, "vectorizer", None)
+        self.numeric_feature_names = getattr(sad, "numeric_cols", None) or []
+        self.random_state = getattr(sad, "random_state", 42)
 
-    def linear(self):
-        """Creates a Linear ShapExplainer object with given train data.
-        """
-        self.expl = shap.LinearExplainer(self.model, self.X_train, feature_names=self._truncatefn(self.truncatelen))
-        return self.expl
+        self.warn = not ignore_warning
+        self.feature_warning_threshold = feature_warning_threshold
+        self.sample_warning_threshold = (
+            sample_warning_threshold if sample_warning_threshold is not None else feature_warning_threshold * 1000
+        )
+        self.background_sample_size = background_sample_size
 
-    # should XGBoost be also a tree?
-    def tree(self):
-        """Creates a Tree ShapExplainer object with given train data.
-        """
-        self.expl  = shap.TreeExplainer(self.model, data=self.X_train.toarray(), feature_names=self._truncatefn(self.truncatelen))
-        return self.expl
+        self.Svals = None
+        self.expl = None
+        self.istree = False
+        self.truncatelen = plot_featurename_len
+        self.shapdata = None
+        self.index = None
 
+        self._feature_names = self._resolve_feature_names()
+        self._background_cache = None
+        self._explainer_factory = self._select_backend()
 
-    def kernel(self):
-        """Creates a Kernel ShapExplainer object with given train data.
-        """
-        self.expl = shap.KernelExplainer(self.model.predict, self.X_train, feature_names=self._truncatefn(self.truncatelen))
-        return self.expl
-
-
-    def plain(self):
-        """Creates a Standard ShapExplainer object with given anomaly detector.
-        """
-        self.expl = shap.Explainer(self.model, feature_names=self._truncatefn(self.truncatelen))
-        return self.expl
-
-
-    # a function for mapping, could be changed to cases in python 3.10
-    def _scuffmapping(self):
-        """Maps the anomaly detection model to the correct ShapExplainer function.
-
-        Returns:
-            shap.Explainer: The ShapExplainer object for the anomaly detection model.
-        """
-        if isinstance(self.model, (LogisticRegression,LinearSVC)):
-            return self.linear
-        elif isinstance(self.model, (IsolationForest,DecisionTreeClassifier,RandomForestClassifier)):
+    def _select_backend(self):
+        if isinstance(self.model, (LogisticRegression, LinearSVC)):
+            return self._build_linear_explainer
+        if self._is_tree_model():
             self.istree = True
-            return self.tree
-        elif isinstance(self.model, (XGBClassifier)):
-            return self.plain
-        else:
-            # maybe this is good?
-            raise NotImplementedError
+            return self._build_tree_explainer
+        if hasattr(self.model, "predict"):
+            # KernelExplainer tolerates arbitrary callable predict functions.
+            return self._build_kernel_explainer
+        return self._build_plain_explainer
 
+    def _is_tree_model(self) -> bool:
+        if isinstance(self.model, self.TREE_MODELS):
+            return True
+        return hasattr(self.model, "tree_") or hasattr(self.model, "estimators_")
 
-    # should this sample the default test data?
-    # should this return the shap values?
-    def calc_shapvalues(self, test_data:np.ndarray=None, custom_slice:slice=None):
-        """This function creates the SHAP values for a given vectorized dataset. The data 
-        should be vectorized by a vectorizer of the trained anomaly detection model.
+    def _build_linear_explainer(self):
+        background = self._ensure_float32(self._get_background_data())
+        if background is None:
+            raise ValueError("Linear SHAP explainers require training data.")
+        self.expl = shap.LinearExplainer(self.model, background, feature_names=self._truncate_feature_names(self.truncatelen))
+        return self.expl
 
-        Args:
-            test_data (np.ndarray, optional): The data used to calculate the SHAP values. If not given, the function uses the test data of the anomaly detection object.
-            custom_slice (slice, optional): The used dataset can be sliced by a Python slice object to select only a sample of the data to be used. Defaults to None.
+    def _build_tree_explainer(self):
+        background = self._ensure_float32(to_dense(self._get_background_data()), force_dense=True)
+        self.expl = shap.TreeExplainer(self.model, data=background, feature_names=self._truncate_feature_names(self.truncatelen))
+        return self.expl
 
-        Raises:
-            ResourceWarning: If ignore_warning not set true when creating the ShapExplainer, stops running if the computation is too resource intensive.
+    def _build_kernel_explainer(self):
+        background = self._ensure_float32(self._get_background_data())
+        if background is None:
+            raise ValueError("Kernel SHAP explainers require training data.")
+        predict_fn = (
+            getattr(self.model, "predict_proba", None)
+            or getattr(self.model, "decision_function", None)
+            or getattr(self.model, "predict", None)
+        )
+        self.expl = shap.KernelExplainer(predict_fn, background, feature_names=self._truncate_feature_names(self.truncatelen))
+        return self.expl
 
-        Returns:
-            np.ndarray: The calculated SHAP-values.
-        """
-        if test_data == None:
-            test_data = self.X_test 
-        
+    def _build_plain_explainer(self):
+        self.expl = shap.Explainer(self.model, feature_names=self._truncate_feature_names(self.truncatelen))
+        return self.expl
+
+    def _resolve_feature_names(self) -> np.ndarray:
+        if self.vec is not None and hasattr(self.vec, "get_feature_names_out"):
+            return self.vec.get_feature_names_out()
+        if hasattr(self.model, "feature_names_in_"):
+            return np.asarray(self.model.feature_names_in_)
+        if self.numeric_feature_names:
+            return np.asarray(self.numeric_feature_names)
+        width = None
+        for candidate in (self.X_train, self.X_test):
+            if candidate is not None and hasattr(candidate, "shape"):
+                width = candidate.shape[1]
+                break
+        if not width:
+            return np.asarray([])
+        return np.asarray([f"feature_{idx}" for idx in range(width)])
+
+    def _truncate_feature_names(self, length: int):
+        if self._feature_names.size == 0:
+            return None
+        return self._feature_names.astype(f"<U{length}", copy=False)
+
+    def _get_background_data(self):
+        if self._background_cache is not None:
+            return self._background_cache
+        source = self.X_train if self.X_train is not None else self.X_test
+        if source is None:
+            return None
+        sampled = self._sample_rows(source, self.background_sample_size)
+        self._background_cache = sampled
+        return sampled
+
+    def _sample_rows(self, data, target_size: int | None):
+        if target_size is None or target_size <= 0:
+            return data
+        total = getattr(data, "shape", (0,))[0]
+        if not total or total <= target_size:
+            return data
+        rng = np.random.default_rng(self.random_state)
+        indices = rng.choice(total, size=target_size, replace=False)
+        return data[indices]
+
+    def _ensure_float32(self, data, *, force_dense: bool = False):
+        if data is None:
+            return None
+        payload = to_dense(data) if force_dense else data
+        if isinstance(payload, np.ndarray):
+            return payload.astype(np.float32, copy=False)
+        if hasattr(payload, "astype"):
+            return payload.astype(np.float32)
+        return np.asarray(payload, dtype=np.float32)
+
+    def calc_shapvalues(self, test_data=None, custom_slice: slice | None = None):
+        """Calculate SHAP values for a vectorised dataset."""
+        if test_data is None:
+            test_data = self.X_test
+        if test_data is None:
+            raise ValueError("No dataset provided and detector.X_test is empty.")
         if custom_slice:
             test_data = test_data[custom_slice]
-        
-        featureamount = self.vec.get_feature_names_out().shape[0]
-        dataamount = test_data.size
-        
-        # the actual threshold could be tweaked but it was found that both data and feature
-        # amount matters, so now the warning looks for both of them.
-        # Could be changed to be something better if needed, now just a warning.
-        if (dataamount >= 1000*self.threshold or featureamount >= self.threshold) and self.warn:
-            print("Using large data set / many features, calculating shapvalues can be resource intensive!")
-            raise ResourceWarning
 
-        self.shapdata = test_data
-        expl = self.func()
-        if self.istree:
-            self.Svals = expl(test_data.toarray())      
- 
-            if isinstance(self.model, IsolationForest):
-                pass
-            else:
-            # some tree models gives two sets of values which are "mirrored"
-            # when 1 the anomaly should have positive shap value
-                self.Svals = self.Svals[:,:,1]
-        else:
-            self.Svals = expl(test_data)
+        prepared = self._ensure_float32(test_data, force_dense=self.istree)
+        feature_count = getattr(prepared, "shape", (0, 0))[1]
+        sample_size = getattr(prepared, "shape", (0,))[0] if hasattr(prepared, "shape") else len(prepared)
+
+        if self.warn:
+            if self.feature_warning_threshold and feature_count >= self.feature_warning_threshold:
+                raise ResourceWarning("Feature count exceeds configured SHAP guard.")
+            total_cells = sample_size * max(feature_count, 1)
+            if self.sample_warning_threshold and total_cells >= self.sample_warning_threshold:
+                raise ResourceWarning("SHAP matrix would allocate too many cells.")
+
+        self.shapdata = prepared
+        expl = self.expl or self._explainer_factory()
+        self.expl = expl
+        values = expl(prepared)
+        self.Svals = self._coerce_tree_output(values, prepared)
         return self.Svals
-        
+
+    def _coerce_tree_output(self, values, prepared):
+        if not self.istree or isinstance(self.model, IsolationForest):
+            return values
+        payload = values.values if hasattr(values, "values") else values
+        if payload.ndim < 3:
+            return values
+        positive_class = payload[:, :, 1]
+        if hasattr(values, "values"):
+            base_values = getattr(values, "base_values", None)
+            if base_values is not None and base_values.ndim > 1:
+                base_values = base_values[:, 1]
+            return shap.Explanation(
+                values=positive_class,
+                base_values=base_values,
+                data=getattr(values, "data", prepared),
+                feature_names=getattr(values, "feature_names", self._truncate_feature_names(self.truncatelen)),
+                output_names=getattr(values, "output_names", None),
+            )
+        return positive_class
 
     @property
     def shap_values(self):
-        """
-        Returns:
-            np.ndarray: The stored SHAP-values.
-        """
         return self.Svals
-
 
     @property
     def feature_names(self):
-        """
-        Returns:
-            ndarray of str objects: Stored feature names.
-        """
-        return self.vec.get_feature_names_out()
-        
+        return self._feature_names
+
+    def _shap_value_array(self):
+        if self.Svals is None:
+            return None
+        return self.Svals.values if hasattr(self.Svals, "values") else self.Svals
 
     def sorted_shapvalues(self):
-        """Can be used to get a sorted array of shap values. Sorted by feature importance.
-        Does not contain base value.
-
-        Returns:
-            ndarray: ndarray of sorted shap values from most important to least.
-        """
-        if self.Svals == None:
+        values = self._shap_value_array()
+        if values is None:
             return None
-        if self.index is not None:
-            val = self.index
-        else:
-            val = np.argsort(np.sum(np.abs(self.Svals.values), axis=0))
-        return np.array([self.Svals.values[:,i] for i in val][::-1])
-
+        importance = np.sum(np.abs(values), axis=0)
+        if self.index is None:
+            self.index = np.argsort(importance)
+        return np.array([values[:, idx] for idx in self.index][::-1])
 
     def sorted_featurenames(self):
-        """
-        Returns:
-            list: Sorted feature names by SHAP importance.
-        """
-        val =  np.argsort(np.sum(np.abs(self.Svals.values), axis=0))
-        self.index = val 
-        fn = self.vec.get_feature_names_out()
-        return [fn[i] for i in val][::-1]
+        values = self._shap_value_array()
+        if values is None:
+            return []
+        importance = np.sum(np.abs(values), axis=0)
+        self.index = np.argsort(importance)
+        names = self.feature_names
+        if names is None or len(names) == 0:
+            names = np.asarray([f"feature_{idx}" for idx in range(importance.shape[0])])
+        return [names[idx] for idx in self.index][::-1]
 
-
-    def _truncatefn(self,length:int):
-        """Truncates the feature names to the given length.
-
-        Args:
-            length (int): The maximum length of the feature names.
-
-        Returns:
-            ndarray of str objects: The truncated feature names.
-        """
-        return self.vec.get_feature_names_out().astype(f'<U{length}')
-
-    def plot(self, data:np.ndarray=None,plottype="summary", custom_slice:slice=None, displayed=16):
-        """Plots the SHAP values in different plots to understand the importance of the features
-        in the anomaly detection model. The plottype currently implemented are "summary", "bar", 
-        and "beeswarm". The data to be plotted can be given directly to the function or the function
-        uses the test data of the anomaly detection object. The custom_slice can be used to select
-        only a sample of the data to be plotted.
-
-        Args:
-            data (np.ndarray, optional): Data used to calculate the SHAP values and creating the plot. Defaults to None. If no data given
-            function uses test data included in anomaly detection object.
-            plottype (str, optional): The plottype used for the plot, "summary", "bar", or "beeswarm". Defaults to "summary".
-            slice (slice, optional): The slice used to select only a sample of the data to be plotted. Defaults to None.
-            displayed (int, optional): The number of displayed features in the plot. Defaults to 16.
-        """
-        if data != None or self.Svals == None or custom_slice:
+    def plot(self, data=None, plottype: str = "summary", custom_slice: slice | None = None, displayed: int = 16):
+        """Plot SHAP results with lightweight defaults."""
+        if data is not None or self.Svals is None or custom_slice:
             self.calc_shapvalues(data, custom_slice)
             plotdata = self.shapdata
         elif custom_slice:
@@ -350,21 +481,13 @@ class ShapExplainer:
 
         fullnames = self.sorted_featurenames()
         print("====================================")
-        for i in range(displayed):
+        for i in range(min(displayed, len(fullnames))):
             print(fullnames[i])
         print("====================================")
-     
+
         if plottype == "summary":
             shap.summary_plot(self.Svals, plotdata, max_display=displayed)
         elif plottype == "bar":
             shap.plots.bar(self.Svals, max_display=displayed)
-
-        # create new elif for a new plot
         elif plottype == "beeswarm":
-            # add shap plot with needed args, 
-            # usually shap values from shap explainer
-            # also usually max_display
-            # depending on plot may have other requirements
-            # for example summary_plot uses the dataset in some examples
             shap.plots.beeswarm(self.Svals, max_display=displayed)
-            
