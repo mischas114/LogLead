@@ -140,6 +140,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional: vorhandenes IF+Vectorizer-Bundle laden und Training überspringen.",
     )
     parser.add_argument(
+        "--load-sup-models",
+        type=Path,
+        default=None,
+        help="Optional: Ordner mit gespeicherten supervised Modellen (model_key.joblib). Wenn vorhanden, wird das Training übersprungen.",
+    )
+    parser.add_argument(
         "--skip-if",
         action="store_true",
         help="IsolationForest in Phase F überspringen (nur supervised Modelle verwenden).",
@@ -270,6 +276,7 @@ def train_registry_models(
     available_ram_gb: float | None,
     memory_guard_enabled: bool,
     shap_config: dict | None,
+    load_sup_models_dir: Path | None = None,
 ) -> dict[str, dict]:
     results: dict[str, dict] = {}
     if not model_keys:
@@ -348,6 +355,27 @@ def train_registry_models(
         detector.test_df = eval_df
         detector.prepare_train_test_data()
 
+        # Optional: vorhandenes Modell + Vectorizer laden
+        model_loaded = False
+        if load_sup_models_dir:
+            model_path = load_sup_models_dir / f"{model_key}.joblib"
+            if model_path.exists():
+                try:
+                    import joblib
+                    bundle = joblib.load(model_path)
+                    if isinstance(bundle, tuple) and len(bundle) == 2:
+                        detector.model, detector.vec = bundle
+                        model_loaded = True
+                        print(f"[{model_key}] Modell + Vectorizer geladen von {model_path}")
+                        # Features mit geladenem Vectorizer neu transformieren
+                        detector.prepare_train_test_data()
+                    else:
+                        print(f"[WARN:{model_key}] Bundle-Format ungültig in {model_path}, trainiere neu.")
+                except Exception as exc:
+                    print(f"[WARN:{model_key}] Laden fehlgeschlagen ({exc}), trainiere neu.")
+            else:
+                print(f"[INFO:{model_key}] Kein gespeichertes Modell gefunden unter {model_path}, trainiere neu.")
+
         train_kwargs_final = train_kwargs.copy()
         if spec.get("train_method") == "train_XGB":
             if holdout_meta.get("applied") and detector.labels_test:
@@ -357,7 +385,8 @@ def train_registry_models(
             else:
                 train_kwargs_final.pop("early_stopping_rounds", None)
 
-        getattr(detector, spec["train_method"])(**train_kwargs_final)
+        if not model_loaded:
+            getattr(detector, spec["train_method"])(**train_kwargs_final)
         pred_df = detector.predict()
         pred_df = attach_row_ids(pred_df)
         pred_df, score_col = append_scores(pred_df, detector, model_key)
@@ -889,6 +918,7 @@ def main() -> None:
         available_ram_gb=available_ram_gb,
         memory_guard_enabled=memory_guard_enabled,
         shap_config=shap_config,
+        load_sup_models_dir=args.load_sup_models,
     )
 
     if nn_source == "if":

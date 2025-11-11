@@ -719,6 +719,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional path for persisting the trained IsolationForest model and vectorizer via joblib.",
     )
     parser.add_argument(
+        "--save-sup-models",
+        type=Path,
+        default=None,
+        help="Optional directory path for persisting trained supervised models (each as model_key.joblib).",
+    )
+    parser.add_argument(
         "--load-model",
         type=Path,
         default=None,
@@ -1312,6 +1318,20 @@ def main() -> None:
         fit_elapsed = time.perf_counter() - start_fit
         detector.predict()
         _log_model_resource_stats(model_key, detector, train_kwargs_final, vectorizer_kwargs, fit_elapsed)
+        
+        # Optional: supervised Modell speichern
+        if args.save_sup_models:
+            save_dir = args.save_sup_models
+            if not save_dir.is_absolute():
+                save_dir = (orig_cwd / save_dir).resolve()
+            save_dir.mkdir(parents=True, exist_ok=True)
+            model_file = save_dir / f"{model_key}.joblib"
+            try:
+                joblib.dump((detector.model, detector.vec), model_file, compress=3)
+                print(f"  -> Modell gespeichert unter {model_file}")
+            except Exception as exc:
+                print(f"  -> [WARN] Speichern fehlgeschlagen: {exc}")
+        
         if holdout_meta.get("applied") and detector.labels_train and detector.labels_test:
             try:
                 train_pred = detector._batched_call(detector.model.predict, detector.X_train)

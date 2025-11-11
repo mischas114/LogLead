@@ -51,6 +51,32 @@ MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
    --shap-sample 200
 ```
 
+### Saving and reusing supervised models
+
+To save training time, you can persist supervised models trained in LO2_samples.py and reuse them in Phase F:
+
+```bash
+# Step 1: Train and save supervised models
+python demo/lo2_e2e/LO2_samples.py \
+  --phase full \
+  --models event_lr_words,event_xgb_words,event_dt_trigrams \
+  --sup-holdout-fraction 0.2 \
+  --save-sup-models models/supervised
+
+# Step 2: Load saved models in Phase F for explainability (no retraining)
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+  --root demo/result/lo2 \
+  --skip-if \
+  --sup-models event_lr_words,event_xgb_words,event_dt_trigrams \
+  --load-sup-models models/supervised \
+  --shap-sample 200
+```
+
+Each supervised model is saved as `<model_key>.joblib` containing the trained model + vectorizer bundle. This workflow is useful for:
+- Running multiple explainability experiments with different SHAP parameters
+- Generating explanations for different sample sizes without retraining
+- Ensuring consistent models across different analysis runs
+
 All outputs are written beneath `demo/result/lo2` by default. Adjust CLI options to mirror your dataset size and desired sampling behaviour.
 
 ## Configurable anomaly detectors

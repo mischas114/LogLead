@@ -208,15 +208,71 @@ importance varies widely without clear patterns.
 
 ### Next steps:
 ```bash
-# Experiment E03: XGBoost (tree-based)
-python demo/lo2_e2e/LO2_samples.py --models event_xgb_words
-MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py --sup-models event_xgb_words
+# Experiment E03: XGBoost (tree-based) - NEW MODEL
+# Note: Phase F will re-train the model with explainability in one go
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+  --root demo/result/lo2 \
+  --skip-if \
+  --sup-models event_xgb_words \
+  --shap-sample 200 \
+  --sup-holdout-fraction 0.2
 
-# Experiment E04: Feature comparison
-python demo/lo2_e2e/LO2_samples.py --models event_lr_words,event_dt_trigrams,sequence_lr_numeric
+# Experiment E04: Decision Tree with Trigrams - DIFFERENT FEATURES (300 -> too little RAM)
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+  --root demo/result/lo2 \
+  --skip-if \
+  --sup-models event_dt_trigrams \
+  --shap-sample 200 \
+  --sup-holdout-fraction 0.2
 ```
 
-See complete list in: `docs/THESIS_TODO_CHECKLIST.md`
+**Important:** 
+- Phase F trains supervised models fresh each time (no loading from disk)
+- Always include `--sup-holdout-fraction 0.2` in Phase F to get proper validation
+- Each experiment uses a **different model or features**, so results will differ from E02
+
+See complete list in: `03-todo-checklist.md`
+
+---
+
+## Reusing Models (Advanced Workflow)
+
+If you want to save training time and reuse trained supervised models for explainability experiments:
+
+### Step 1: Train and save models with LO2_samples.py
+```bash
+# Train multiple supervised models and save them to a directory
+python demo/lo2_e2e/LO2_samples.py \
+  --phase full \
+  --models event_lr_words,event_xgb_words,event_dt_trigrams \
+  --sup-holdout-fraction 0.2 \
+  --save-sup-models models/supervised
+```
+
+This creates:
+- `models/supervised/event_lr_words.joblib`
+- `models/supervised/event_xgb_words.joblib`
+- `models/supervised/event_dt_trigrams.joblib`
+
+Each file contains the trained model + vectorizer bundle.
+
+### Step 2: Load saved models in Phase F for explainability
+```bash
+# Generate explainability for pre-trained models (no retraining)
+MPLBACKEND=Agg python demo/lo2_e2e/lo2_phase_f_explainability.py \
+  --root demo/result/lo2 \
+  --skip-if \
+  --sup-models event_lr_words,event_xgb_words,event_dt_trigrams \
+  --load-sup-models models/supervised \
+  --shap-sample 200
+```
+
+**Benefits:**
+- ⚡ Faster: Skip retraining (~30 seconds per model saved)
+- 🔄 Reproducible: Same model across multiple explainability runs
+- 🧪 Flexible: Tweak SHAP parameters without retraining
+
+**Note:** Models must be trained with the same data and holdout settings. If data changes, retrain and save new models.
 
 ---
 

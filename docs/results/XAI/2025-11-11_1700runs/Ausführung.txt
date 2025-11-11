@@ -1,0 +1,27 @@
+python demo/lo2_e2e/LO2_samples.py \
+  --phase if \
+  --if-contamination 0.15 \
+  --if-item e_words \
+  --if-numeric seq_len,duration_sec,e_words_len,e_trigrams_len \
+  --save-model models/lo2_if.joblib \
+  --overwrite-model \
+  --report-precision-at 200 \
+  --report-fp-alpha 0.01 \
+  --dump-metadata
+
+-> Big Parquet, safe, Result:
+
+[Guard] Available RAM (approx.): 9.5 GB
+Reading enhanced LO2 sequences from /Users/MTETTEN/Projects/LogLead/demo/result/lo2/lo2_sequences_enhanced.parquet
+Sequence anomalies: 1732 (49.9a4%)
+[1]    72597 killed     python demo/lo2_e2e/LO2_samples.py --phase if --if-contamination 0.15  e_word"
+
+
+LO2_samples.py reads the entire enhanced parquet into memory (demo/lo2_e2e/LO2_samples.py (lines 830-899)) and then launches the IF phase (demo/lo2_e2e/LO2_samples.py (lines 960-1100)). Your run showed only the guard + parquet log before macOS killed PID 72597, so the process died before IF training even started.
+The parquet itself is 2.9 GB, but it holds only 3 468 sequences whose e_words lists are enormous: 618 796 162 tokens and 6 065 701 705 characters in total (avg. 178 k tokens / 1.75 M chars per sequence, max ≈400 k tokens) in demo/result/lo2/lo2_sequences_enhanced.parquet. There are 14 062 466 distinct tokens overall and ~9 516 unique tokens per sequence on average (computed via Polars scans of that file).
+During IF preparation AnomalyDetector._prepare_data() turns the entire e_words column into native Python lists (loglead/anomaly_detection.py (lines 270-307)). That forces Python to materialize ≈619 M separate str objects plus the list-of-lists that holds them. With an average sys.getsizeof of ~51 B per token (measured on the dataset), the strings alone need ~31–32 GB; the list reference arrays add ~4.6 GB, so just constructing events = ...to_list() consumes ~36 GB before CountVectorizer even runs. Building a vocabulary for 14 M unique tokens adds roughly another gigabyte of dict overhead, and the resulting sparse matrix (~33 M non‑zero entries) costs ~250 MB. Peak usage therefore exceeds 37–40 GB, with some extra headroom needed for the Polars frame, IsolationForest model, and Python interpreter bookkeeping.
+With only 9.5 GB free (per [Guard] Available RAM (approx.): 9.5 GB from demo/lo2_e2e/LO2_samples.py (lines 836-840)), the job was short by roughly 28–30 GB. In practice you would want 48–64 GB free to run this phase reliably, or you must drastically shrink the token payload before prepare_train_test_data().
+Next steps
+
+Either run on a machine with ≥64 GB RAM or trim the dataset: downsample sequences, cap the number of tokens per sequence before writing the parquet, or skip --if-item e_words and begin with the numeric features to validate the pipeline.
+Longer term, consider changing _prepare_data() to stream batches into the vectorizer (or use HashingVectorizer) so you never materialize the full list of 600 M tokens in Python; that would cut the RAM requirement by an order of magnitude.
