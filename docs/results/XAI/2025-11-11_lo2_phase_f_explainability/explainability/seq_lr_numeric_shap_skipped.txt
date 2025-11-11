@@ -1,0 +1,2 @@
+SHAP wurde übersprungen, weil das Sequence-LR-Modell nur numerische Features nutzt
+und daher kein Vectorizer mit Feature-Namen vorhanden ist.

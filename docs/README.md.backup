@@ -1,0 +1,76 @@
+---
+title: LO2 Dokumentationsindex
+summary: Navigationshilfe für die restrukturierte LO2-Doku.
+last_updated: 2025-11-03
+---
+
+# LogLead Documentation
+
+This folder contains the main documentation for the LogLead project.
+
+---
+
+## 🎓 Bachelor Thesis Resources
+
+**Topic:** Feasibility of Explainable Anomaly Detection in OAuth/OIDC Logs  
+**Created:** November 11, 2025
+
+### Quick Access
+
+**Getting Started (Read in Order):**
+1. 🚀 **[QUICK_START_GUIDE.md](./QUICK_START_GUIDE.md)** - Start here! Your first experiment in 30 minutes
+2. 📋 **[THESIS_TODO_CHECKLIST.md](./THESIS_TODO_CHECKLIST.md)** - Complete TODO list and setup validation
+3. ❓ **[ANSWERS_TO_YOUR_QUESTIONS.md](./ANSWERS_TO_YOUR_QUESTIONS.md)** - Answers to your 4 key questions
+
+**Reference Documentation:**
+- � **[THESIS_DOCUMENTATION_SUMMARY.md](./THESIS_DOCUMENTATION_SUMMARY.md)** - Overview of all thesis resources
+- 📊 **[THESIS_MACHBARKEIT_ANALYSIS.md](./THESIS_MACHBARKEIT_ANALYSIS.md)** - Comprehensive feasibility analysis (43 pages)
+- 🧪 **[THESIS_EXPERIMENT_TEMPLATES.md](./THESIS_EXPERIMENT_TEMPLATES.md)** - 7 ready-to-use experiment templates
+- 📝 **[THESIS_EXPERIMENT_TRACKING.md](./THESIS_EXPERIMENT_TRACKING.md)** - Systematic tracking sheet for experiments
+
+### What's Inside
+
+This documentation package provides:
+This documentation package provides:
+
+- Complete feasibility analysis of explainable anomaly detection
+- SHAP-based explanations, NN-Mapping, and feature importance tools
+- 10+ experiment scenarios with copy-paste commands
+- Systematic tracking system for reproducible research
+- Comparison frameworks for "good vs. bad" solutions
+- Metrics collection templates (Accuracy, F1, Precision@k, etc.)
+- Documentation templates for thesis chapters
+
+### Ready to Start?
+
+**Status check:** ✅ All infrastructure complete, data ready, models available  
+**Time to first results:** 30 minutes  
+**Required reading:** Quick Start Guide (above)
+
+**TL;DR:** Everything you need to systematically test, document, and prove the feasibility of explainable anomaly detection in OAuth/OIDC logs.
+
+---
+
+## Original Documentation Structure
+
+## Verzeichnisüberblick
+
+- `overview/`: Kontext, Zielbild und ein schneller Architekturüberblick.
+- `dataset/`: Herkunft, Aufbau und Nutzung des LO2-Datensatzes.
+- `pipeline/`: Ausführung, Architekturdetails und Isolation-Forest-Leitfaden.
+- `models/`: Registry-Katalog und aktuelle Erkenntnisse zu den Modellläufen.
+- `operations/`: Umgang mit Artefakten, Persistenz und Dateiaustausch.
+- `roadmap/`: Offene Punkte, nächste Schritte und TODOs.
+- `contributing/`: Änderungen, Verantwortlichkeiten und Einstieg für neue Beiträge.
+- `_archive/`: Historische Dateien, die ersetzt oder obsolet sind (siehe Begründung je Datei).
+
+## Schreibregeln
+
+- Genau eine H1 pro Datei, alle Inhalte auf Deutsch.
+- Kurze Absätze, Listen statt Textblöcke, Code mit passender Sprachangabe.
+- TODOs erscheinen als `TODO: <Frage>` am Ende des jeweiligen Abschnitts.
+
+## Pflegehinweise
+
+- Änderungen bitte mit Datum und Reason in `contributing/change-log.md` ergänzen.
+- Neue Dateien immer im kebab-case benennen und direkt hier referenzieren.

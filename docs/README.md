@@ -4,9 +4,39 @@ summary: Navigationshilfe für die restrukturierte LO2-Doku.
 last_updated: 2025-11-03
 ---
 
-# LO2 Dokumentationsindex
+# LogLead Documentation
 
-Die Dokumentation gliedert sich in schlanke Module. Jedes Unterverzeichnis bündelt genau einen Zweck und vermeidet Dopplungen.
+This folder contains the main documentation for the LogLead project.
+
+---
+
+## 🎓 Bachelor Thesis Resources
+
+**Topic:** Feasibility of Explainable Anomaly Detection in OAuth/OIDC Logs  
+**Created:** November 2025
+
+All thesis-related documentation is organized in the **thesis/** subdirectory.
+
+### 📚 [→ Go to Thesis Documentation Index](thesis/README.md)
+
+**Quick links:**
+- 🚀 [Quick Start Guide](thesis/01-quick-start-guide.md) - First experiment in 30 minutes
+- 📋 [TODO Checklist](thesis/03-todo-checklist.md) - Complete task list
+- 🧪 [Experiment Templates](thesis/04-experiment-templates.md) - 7 ready-to-use scenarios
+- 📝 [Experiment Tracking](thesis/05-experiment-tracking.md) - Track all experiments
+
+**What's included:**
+- Complete feasibility analysis (43 pages)
+- SHAP-based explanations, NN-Mapping, feature importance
+- 10+ experiment scenarios with copy-paste commands
+- Systematic tracking system for reproducible research
+- Comparison frameworks for "good vs. bad" solutions
+
+**Status:** ✅ Ready to start • ⏱️ 30 minutes to first results
+
+---
+
+## Original Documentation Structure
 
 ## Verzeichnisüberblick
 
