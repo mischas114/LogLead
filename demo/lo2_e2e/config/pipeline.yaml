@@ -1,0 +1,24 @@
+# Example pipeline configuration
+# This demonstrates a declarative pipeline without IF branching
+
+pipeline:
+  - step: load_data
+    with:
+      sequences_path: "demo/result/lo2/lo2_sequences_enhanced.parquet"
+      events_path: "demo/result/lo2/lo2_events.parquet"
+  
+  - step: preprocess
+    with:
+      feature_columns: ["seq_len", "duration_sec"]
+      vectorizer_type: null  # null for numeric features
+  
+  - step: predict
+    with:
+      model: "dt_v1"
+      models_config: "demo/lo2_e2e/config/models.yaml"
+  
+  - step: explain
+    with:
+      model: "dt_v1"
+      max_samples: 10
+      output_file: "demo/result/lo2/explanations.jsonl"

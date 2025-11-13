@@ -1,0 +1,23 @@
+# Model adapter configuration
+# Maps model keys to adapter types and artifact paths
+
+models:
+  # Decision Tree example
+  dt_v1:
+    adapter: decision_tree
+    path: "demo/result/lo2/artifacts/dt_v1.joblib"
+    description: "Decision tree trained on sequence features"
+  
+  # Random Forest example  
+  rf_v1:
+    adapter: random_forest
+    path: "demo/result/lo2/artifacts/rf_v1.joblib"
+    description: "Random forest trained on word tokens"
+  
+  # XGBoost example
+  xgb_v1:
+    adapter: xgboost
+    path: "demo/result/lo2/artifacts/xgb_v1.joblib"
+    description: "XGBoost classifier on sequence features"
+
+# Add more models by adding entries here - no code changes needed
