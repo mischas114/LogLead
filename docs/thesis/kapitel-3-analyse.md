@@ -138,7 +138,7 @@ Diese Analyse basiert auf dem aktuellen Stand der Repository-Dokumentation und C
 - Keine Diskussion: interpretierbar vs. performant
 
 ### ⚠️ Zu technisch
-- `train_kwargs` mit vollständigen HP-Listen (`max_depth=8`, `n_estimators=120`)
+- `train_kwargs` mit vollständigen Hyperparameter-Listen (`max_depth=8`, `n_estimators=120`)
 - `train_method` als String-Referenz (`"train_LR"`, `"train_XGB"`)
 - CLI-Parameter (`--models event_lr_words,event_xgb_words`)
 
@@ -245,7 +245,7 @@ Diese Analyse basiert auf dem aktuellen Stand der Repository-Dokumentation und C
 - `docs/thesis/*.md`: Zwischen Thesis-Text und Arbeitsdokumentation vermischt
 
 ### Technische Tiefe (nicht BA-geeignet)
-- HP-Listen in MODEL_REGISTRY (gehören in Anhang oder Kapitel 4)
+- Hyperparameter-Listen in MODEL_REGISTRY (gehören in Anhang oder Kapitel 4)
 - Vectorizer-Parameter (`max_features=40000`, `min_df=5`)
 - Polars-Spalten als Referenz statt konzeptioneller Beschreibung
 
@@ -280,7 +280,7 @@ Diese Analyse basiert auf dem aktuellen Stand der Repository-Dokumentation und C
 ### 3.5 Modelle
 - 13 Modelle dokumentiert
 - Einsatzbegründung fehlt
-- HP-Details gehören in Kapitel 4
+- Hyperparameter-Details gehören in Kapitel 4
 
 ### 3.6 Explainability
 - SHAP und NNExplainer vorhanden
@@ -300,7 +300,7 @@ Diese Analyse basiert auf dem aktuellen Stand der Repository-Dokumentation und C
 2. **Abbildung zeichnen** (Pipeline-Übersicht, nicht Mermaid)
 3. **Querverweis-Struktur** definieren (vgl. 2.2, siehe Anhang A)
 4. **Tabellen vorbereiten** (Feature-Sets, Modelle, Metriken)
-5. **HP-Details auslagern** in Kapitel 4 oder Anhang
+5. **Hyperparameter-Details auslagern** in Kapitel 4 oder Anhang
 
 ---
 
